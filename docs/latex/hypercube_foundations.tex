@@ -1,0 +1,1032 @@
+\documentclass{strategynet-report}
+
+\hypersetup{
+  pdftitle={Slice + Hypercube},
+  pdfauthor={research@strategynet.ai}
+}
+
+\lstdefinestyle{slice}{
+  style=sncode
+}
+
+\newcommand{\SLICE}{\textsf{Slice}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+
+\tikzset{
+  slicebox/.style={
+    draw=SNInk,
+    fill=SNInk!5,
+    rounded corners=2pt,
+    align=center,
+    minimum height=9mm,
+    text width=29mm,
+    font=\sffamily\fontsize{8}{9.5}\selectfont
+  },
+  slicehot/.style={
+    slicebox,
+    draw=SNSignalDark,
+    fill=SNSignal!7
+  },
+  slicemeta/.style={
+    slicebox,
+    draw=SNMuted,
+    fill=SNMuted!7
+  },
+  sliceaction/.style={
+    slicebox,
+    draw=SNViolet,
+    fill=SNViolet!7
+  },
+  sliceflow/.style={
+    -{Latex[length=2mm]},
+    draw=SNInk,
+    line width=0.75pt
+  },
+  slicefuture/.style={
+    -{Latex[length=2mm]},
+    draw=SNSignalDark,
+    dashed,
+    line width=0.75pt
+  }
+}
+
+\title{\SLICE{} + Hypercube}
+\SNSubtitle{Current analytical state without rebuilding it for every reader}
+\author{\href{mailto:research@strategynet.ai}{research@strategynet.ai}}
+\SNDocumentType{Foundations and architecture}
+\SNVersion{Version 0.2}
+\SNDate{July 2026}
+\SNStatus{Open-source working paper}
+\SNShortTitle{Slice + Hypercube}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+A live basket monitor may recalculate thousands of values whenever prices
+change.  The arithmetic is usually cheap.  Repeatedly finding, joining,
+serializing, and copying the same current inputs is not.  When every reader
+rebuilds that state for itself, a simple vector calculation inherits database
+latency, extra allocation, and inconsistent observation boundaries.
+
+\SLICE{} gives local processes a typed, memory-mapped view of current,
+entity-aligned values.  Hypercube evaluates one coherent input generation
+through a declared node graph and produces cross-sectional outputs that can be
+published back as aligned slices.  The public repository includes the format,
+readers and writers, calculation engine, deterministic synthetic sources, and
+live browser and terminal demonstrations.  This paper explains that
+implemented path and its limits.  Separate slices are not yet one atomic
+multi-slice generation; vendor feeds, durable persistence, arbitrary function
+cells, replication, GPU lowering, and trading actions remain outside the
+current release.  Although the examples use markets, the API also works for
+any stable set of entities.
+\end{abstract}
+
+\SNtableofcontents
+
+\part{Motivation}
+
+\section{From events to live analytical state}
+
+Markets arrive as events, but many decisions are functions of state.  A quote
+event changes the best bid and offer for one instrument; the next consumer
+usually wants the latest midpoint, spread, return, risk exposure, or
+cross-sectional rank.  If every consumer independently rebuilds that state
+from an event stream, the system duplicates joins, symbol resolution, window
+maintenance, and normalization.  If every calculation first queries a durable
+database, the database becomes part of the latency and availability path even
+when the working set is only a few megabytes of current vectors.
+
+The distinction is temporal rather than ideological:
+\begin{itemize}
+  \item an event log answers what happened and in what order;
+  \item a durable analytical store answers historical and ad hoc questions;
+  \item a live state plane answers what the current published values are;
+  \item an execution graph answers how declared outputs follow from those
+        values.
+\end{itemize}
+These are complementary responsibilities.  \SLICE{} is the live state plane.
+The hypercube is the logical coordinate system and calculation graph.  A
+database remains the recovery, research, and audit path; a transport remains
+the mechanism for moving events or published generations between machines.
+
+\begin{SNthesis}
+A current analytical value should be cheap to read because its identity,
+layout, type, generation, and provenance were established when it was
+published---not rediscovered by every reader.
+\end{SNthesis}
+
+The architecture is motivated by repeated whole-population work.  Given
+entity-aligned weights \(w\), returns \(r\), signals \(s\), and betas
+\(\beta\), common calculations are
+\[
+  R_p=w^\top r,\qquad
+  E_s=w^\top s,\qquad
+  E_\beta=w^\top\beta,\qquad
+  G=\lVert w\rVert_1.
+\]
+The arithmetic is elementary.  Most accidental complexity lies in obtaining
+vectors that refer to the same entities, units, observation boundary, and
+generation.  The system therefore treats alignment and publication semantics
+as first-class data contracts.
+
+\section{Design goals}
+
+The present architecture has six goals:
+\begin{enumerate}
+  \item maintain latest source and derived state in fixed-layout,
+        memory-mapped vectors;
+  \item permit many local processes to perform point reads and vector scans
+        without taking a shared reader mutex;
+  \item reject linear algebra across incompatible entity layouts or value
+        schemas;
+  \item run the same node graph in live, replay, and batch modes by changing
+        the supplied update rather than the calculation;
+  \item publish node identity, observation timestamps, coverage, and local
+        compute diagnostics beside values;
+  \item leave room for typed, composable function cells without
+        allowing calculation code to inherit trading authority.
+\end{enumerate}
+
+The first implementation intentionally narrows the platform contract.  It is
+little-endian, uses fixed-size pointer-free payloads, and assumes one writer
+with many readers per slice.  Those constraints make the shared ABI explicit
+enough for Rust today and C++ or Python readers later.  A richer type system,
+distributed replication, global multi-slice generations, and effectful
+actions are evolution points, not implicit properties of the current files.
+
+\section{Related work and scope}
+
+Memory mapping is the operating-system foundation.  POSIX specifies a mapping
+between a process address space and a file or shared-memory object and defines
+shared mappings through which writes change the underlying object
+\cite{posixmmap}.  \SLICE{} adds an application ABI, identity, layout, and
+consistency protocol to that primitive.  It does not assume that mapping a
+file alone makes concurrent access coherent.
+
+Columnar memory systems establish the advantages of contiguous, typed buffers.
+Apache Arrow defines a language-independent columnar representation designed
+for sequential scans, constant-time random access, vectorization, and
+relocatable zero-copy shared-memory access \cite{arrow}.  \SLICE{} shares
+those physical motivations but has a smaller purpose: mutable current-state
+vectors with stable entity slots and explicit writer epochs.  It is not an
+Arrow implementation or a replacement for its interoperability ecosystem.
+
+Array database work treats multidimensional arrays as first-class data rather
+than encoding every analytical object as a relation.  SciDB, for example, was
+designed for complex analytics over array-shaped scientific data
+\cite{scidb}.  The hypercube developed here is closer to a resident execution
+and publication model than a general array DBMS.  Dimensions describe aligned
+live slices and calculation identities; durable historical queries remain
+outside the hot path.
+
+The numerical interface follows a long tradition of separating stable vector
+and matrix operations from their machine-specific implementations.  The
+original BLAS specification included dot products, vector operations, norms,
+and related kernels \cite{blas}.  \SLICE{} does not define a new numerical
+algebra.  It makes aligned live vectors safe to hand to such an algebra and
+leaves room for optimized CPU, SIMD, or GPU kernels behind the same logical
+operation.
+
+For change propagation, adaptive functional programming and differential
+dataflow show how explicit dependencies allow a system to update affected
+results rather than recompute an entire program \cite{adaptive,differential}.
+Those systems are broader and more formal than the current hypercube engine.
+They nevertheless supply the right conceptual boundary for future function
+cells: a declared dependency graph, logical time, deterministic propagation,
+and controlled state are preferable to hidden callbacks attached to mutable
+memory.
+
+\part{Memory and Cube Model}
+
+\section{Stable entity layout}
+
+Let a layout be
+\[
+  L=(\lambda,a,n,U,\iota),
+\]
+where \(\lambda\) is a layout identity, \(a\) is a normalized namespace
+(retained as \texttt{asset\_class} in version-1 JSON), \(n\) is allocated
+capacity, \(U\) is the enabled entity set, and
+\(\iota:U\rightarrow\{0,\ldots,n-1\}\) is an injective slot mapping.  A symbol
+is a normalized lookup key; \texttt{instrument\_id} is the legacy field name
+for the stable namespaced entity identity, and the slot is the dense numerical
+address.
+
+\[
+  \text{entity key}\longrightarrow\text{stable entity id}
+  \longrightarrow\text{slot id}\longrightarrow S[\text{slot id}].
+\]
+
+Slots do not move within a layout.  New entities consume unused slots;
+removed entities are disabled or tombstoned.  Reordering or compaction
+creates a new layout.  The serialized layout is hashed, and every dependent
+slice carries that hash.  A dot product is rejected unless its inputs agree on
+layout hash, schema, and active length.
+
+This separation matters because a domain registry and a numerical layout
+have different rates of change.  Venue, currency, multiplier, expiry, strike,
+and other rich metadata can live in keyed sidecars or services.  The layout
+keeps only the identity and stable dense index required by the shared vectors.
+
+\section{Slice as a published vector}
+
+For a value field \(f\) and a published generation \(g\), a primitive slice is
+a partial vector
+\[
+  S_{f,g}:U\rightarrow V_f\cup\{\bot\},
+\]
+where \(V_f\) is a fixed physical type and \(\bot\) denotes missing or invalid
+state.  Dense analytical slices usually use \(V_f=\R\); point-state slices use
+fixed records such as quote, trade, or quote-at-trade.  Validity is explicit
+rather than inferred from an arbitrary zero.
+
+The version-one file begins with a 256-byte header:
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}p{0.19\textwidth}X X@{}}
+\toprule
+Header group & Fields & Purpose \\
+\midrule
+format & magic, version, header length, value type, slot size &
+reject unknown physical representations \\
+shape & capacity, active length, layout hash, schema hash &
+establish vector compatibility \\
+publication & writer epoch, created and updated timestamps &
+detect stable reads and identify data age \\
+operations & writer flags and heartbeat &
+distinguish liveness from value change \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The current value types are dense \(f64\) and fixed quote, trade, and TAQ
+records.  All shared records are fixed-size, pointer-free, naturally aligned,
+and compatible with a C layout.  A schema hash identifies the payload meaning,
+while a layout hash identifies the entity ordering.  Neither substitutes
+for the other.
+
+\section{The logical hypercube}
+
+A collection of slices forms a logical cube even when no monolithic
+multidimensional allocation exists.  For one generation,
+\[
+  X_g[u,f]=S_{f,g}[\,\iota(u)\,].
+\]
+The implemented engine names four axes directly: generation, entity, primitive
+field, and calculated node.  Applications may add asset class, venue, factor,
+family, horizon, universe, scenario, portfolio, or model version:
+\[
+  X[g,u,f,h,v,s,\ldots].
+\]
+Most of this space is not materialized.  A slice is dense along the entity
+axis with the other coordinates fixed.  A catalog maps a semantic name such
+as \texttt{signal} to the file, layout, type, and role that materialize one
+such slice.
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[node distance=7mm and 8mm]
+  \node[slicemeta] (layout) {\textbf{Layout}\\entity \(\leftrightarrow\) slot};
+  \node[slicehot, right=of layout] (rows) {\textbf{Input rows}\\named primitive fields};
+  \node[slicehot, right=of rows] (cube) {\textbf{Hypercube}\\field and linear nodes};
+  \node[sliceaction, right=of cube] (outputs) {\textbf{Published slices}\\one per selected node};
+  \draw[sliceflow] (layout) -- (rows);
+  \draw[sliceflow] (rows) -- (cube);
+  \draw[sliceflow] (cube) -- (outputs);
+  \node[slicemeta, below=10mm of cube] (generation)
+    {\textbf{Generation}\\mode and observation time};
+  \draw[sliceflow] (generation) -- (cube);
+  \draw[sliceflow] (generation) -- (outputs);
+\end{tikzpicture}
+\caption{Physical slices are aligned one-dimensional slices.  Layout and
+generation metadata give the collection its hypercube meaning.}
+\label{fig:cube-slices}
+\end{figure}
+
+This formulation avoids two extremes.  It does not flatten all meaning into an
+untyped matrix, and it does not allocate every possible combination of
+dimensions.  The catalog and calculation registry describe a sparse set of
+materialized slices; consumers request only the axes and generations required
+for their operation.
+
+\section{Time, observation, and publication}
+
+``Latest'' is not a sufficient temporal contract for financial decisions.  A
+cell may carry:
+\[
+  \tau(c)=(t_{\mathrm{event}},t_{\mathrm{ingest}},
+           t_{\mathrm{compute}},t_{\mathrm{publish}},g).
+\]
+Event time states when the source says the observation occurred.  Ingest time
+states when the local system received it.  Compute and publish time bound the
+derived value's latency.  Generation \(g\) states which coherent calculation
+the value belongs to.
+
+The current quote and trade records retain source and ingest timestamps.
+TAQ records preserve the quote known locally when a trade was processed,
+together with quote age and flags for missing, stale, or temporally inverted
+context.  Hypercube \texttt{CellValue} records node, entity key, finite value,
+and the oldest contributing observation time.  \texttt{NodeStatus} records
+emitted and missing counts plus local compute time.  Snapshot time, slice
+updated time, and writer heartbeat remain distinct.  An application may build
+a freshness service level as a predicate, not an intuition:
+\[
+  \operatorname{fresh}(c,t_d)
+  \iff \operatorname{status}(c)=\mathrm{ok}
+  \land 0\le t_d-t_{\mathrm{publish}}(c)\le\Delta_{\max}
+  \land t_{\mathrm{compute}}\le C_{\max}.
+\]
+
+\part{Consistency and Publication}
+
+\section{What ``nonlocking read'' means}
+
+The desired property is precise: a reader of an already mapped slice should
+not acquire a process-shared mutex or wait for a writer-owned critical section.
+This is a \emph{reader-lockless} contract, not automatically a formal
+wait-free guarantee.  An optimistic reader may have to retry, and under a
+continuous writer it may fail to obtain a stable version within its retry
+budget.
+
+Sequence counters are a standard form of this tradeoff.  The Linux
+documentation describes lockless readers that accept data only when an even
+sequence value is unchanged across the read; it also notes that readers can
+spin while a writer is interrupted and that raw counters do not serialize
+multiple writers \cite{seqlock}.  The current format consequently assumes one
+writer per slice and bounds reader retries.
+
+\section{Point-state protocol}
+
+Quote, trade, and TAQ slices use one sequence counter per slot.  For slot
+\(i\), the writer performs
+\[
+\begin{aligned}
+  q_i&\leftarrow 2k+1 && \text{publication in progress},\\
+  S[i]&\leftarrow v && \text{copy fixed payload},\\
+  q_i&\leftarrow 2k+2 && \text{publication complete}.
+\end{aligned}
+\]
+The reader loads \(q_0\), rejects an odd value, copies the payload, and loads
+\(q_1\).  It accepts only if
+\[
+  q_0=q_1\quad\land\quad q_1\bmod 2=0.
+\]
+An update to AAPL therefore does not make a reader of MSFT retry.  This is the
+appropriate granularity for independently changing latest-state records.
+
+The point snapshot of an entire struct slice is a collection of individually
+coherent cells.  It is not, by itself, proof that every slot represents the
+same market instant.  Consumers that need an atomic universe snapshot require
+a generation-level contract.
+
+\section{Vector protocol}
+
+Dense \(f64\) slices use one epoch for the vector.  A writer makes the epoch
+odd, updates one or many cells, and publishes the next even epoch.  A reader
+loads \(e_0\), scans or copies the vector, and loads \(e_1\); it accepts when
+\[
+  e_0=e_1\quad\land\quad e_1\bmod 2=0.
+\]
+Dot products validate both input epochs before and after the operation.
+Layout, schema, and active-length checks precede the arithmetic.
+
+This protocol gives a coherent view of one slice without a reader mutex.  Its
+scope is limited:
+\begin{itemize}
+  \item a busy writer may force a reader to retry;
+  \item separate slices have separate epochs, so sequentially stable copies may
+        still belong to different logical input generations;
+  \item one writer must own publication for a slice;
+  \item memory-order behavior must be validated on every supported
+        architecture and foreign-language reader implementation.
+\end{itemize}
+
+\section{Consistency classes}
+
+Different data uses should pay for different consistency:
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}p{0.15\textwidth}p{0.22\textwidth}X X@{}}
+\toprule
+Class & Example & Read contract & Failure behavior \\
+\midrule
+cell-latest & quote display, health probe &
+one slot, per-cell sequence & retry or report unavailable \\
+vector-stable & exposure, rank, dot product &
+one slice, stable even epoch & bounded retry \\
+generation-coherent & ETF value or another multi-field decision &
+named immutable multi-slice generation & reject mixed generation \\
+decision-grade & order or rebalance input &
+coherent generation plus freshness, authority, and risk checks &
+fail closed; no action \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The table prevents a common design error: imposing a global lock on all state
+because a small subset of decisions require a global snapshot.  Latest quote
+display can tolerate independently published slots.  A cross-sectional rank
+needs one stable vector.  An ETF fair-value calculation may need constituent
+prices, currencies, holdings, and shares outstanding from one declared
+generation.  A trade requires that coherence plus policy and authority.
+
+\section{Published immutable generations}
+
+The next publication layer is a small multi-version protocol.  A writer builds
+generation \(g+1\) in inactive buffers while readers continue to use \(g\).
+After every slice passes shape, schema, and completeness checks, the writer
+publishes one compact manifest:
+\[
+  M_{g+1}=(g+1,t,\lambda,\{(f,e_f,h_f)\},H),
+\]
+where \(e_f\) and \(h_f\) are the final epoch and content identity of each
+slice and \(H\) authenticates the manifest.  Publication changes a single
+active-generation reference.  A reader pins \(M_g\), reads only the referenced
+immutable buffers, and verifies that the active generation did not change
+before accepting the result.
+
+This is a read-copy-publish design related to multiversion and RCU techniques.
+RCU separates removal from reclamation so readers can traverse an existing
+version without acquiring a conventional lock \cite{rcu}; snapshot isolation
+likewise gives a transaction a named database version \cite{snapshot}.  The
+slice implementation still needs its own lifecycle rules:
+\begin{itemize}
+  \item a generation is immutable after publication;
+  \item buffer reuse waits until no reader can reference the old generation;
+  \item a slow reader is bounded or copied out so it cannot retain generations
+        indefinitely;
+  \item publication uses atomic rename or an aligned atomic generation word;
+  \item crash recovery selects the last complete manifest, never half-written
+        vectors.
+\end{itemize}
+
+No immutable multi-slice manifest or reader-pinning protocol is implemented in
+version 1.  Consumers that need a coherent decision across several nodes
+should use the in-process \texttt{Snapshot}; general multi-slice publication
+remains an explicit extension and must not be inferred from independent slice
+epochs.
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[node distance=8mm and 10mm]
+  \node[slicehot] (active) {\textbf{Generation \(g\)}\\immutable, reader-visible};
+  \node[slicemeta, right=of active] (build) {\textbf{Build \(g+1\)}\\inactive buffers};
+  \node[slicemeta, right=of build] (validate) {\textbf{Validate}\\shape, schema, coverage};
+  \node[sliceaction, right=of validate] (publish) {\textbf{Publish}\\one generation marker};
+  \draw[sliceflow] (active) -- node[above,font=\scriptsize\sffamily]{read} (build);
+  \draw[sliceflow] (build) -- (validate);
+  \draw[sliceflow] (validate) -- (publish);
+  \draw[slicefuture] (publish.south) to[bend right=27]
+    node[below,font=\scriptsize\sffamily]{new readers pin \(g+1\)}
+    (active.south);
+\end{tikzpicture}
+\caption{Copy-publish generations keep readers on immutable state while the
+next coherent set of slices is assembled.}
+\label{fig:generation}
+\end{figure}
+
+\section{Sharding and progress}
+
+Double buffering every vector is attractive when the working set is small.
+For larger or faster-changing cubes, the publication unit can be a shard:
+entity range, field group, asset class, or semantic family.  A generation
+manifest then references a vector of immutable shard versions.  Copy-on-write
+touches only changed shards while the manifest preserves a coherent global
+view.
+
+Progress must be measured rather than assumed.  Relevant counters include
+writer duration, epoch changes per second, reader retries, snapshot failures,
+generation publish latency, oldest pinned generation, and reclaimed bytes.
+If retry tails grow under ingestion load, the answer is not an unbounded spin
+loop.  The system can use smaller shards, longer immutable generations, a
+copied snapshot, or a stale-but-declared generation according to the
+consumer's consistency class.
+
+\part{Hypercube Execution}
+
+\section{Runtime contract}
+
+The current Rust engine receives
+\[
+  U_g=(g,t,m,R,N),
+\]
+where \(g\) is a strictly increasing generation, \(t\) is its Unix-millisecond
+observation time, \(m\) is the execution mode, \(R\) contains keyed
+\texttt{InputRow} values and named primitive fields, and \(N\) is the complete
+\texttt{NodeSpec} graph.  It emits
+\[
+  H_g=(g,t,m,n,V,Q),
+\]
+where \(n\) is the entity count, \(V\) contains ordered
+\texttt{CellValue} records, and \(Q\) contains ordered \texttt{NodeStatus}
+diagnostics.
+
+The modes are \texttt{Live}, \texttt{Replay}, and \texttt{Batch}.  They are
+recorded context, not separate calculation implementations.  A replay changes
+the supplied clock and rows rather than the meaning of a node.  The engine
+rejects a generation that does not advance beyond the last successful update.
+
+\section{Calculation nodes}
+
+The implemented engine has two node kinds and five cross-sectional transforms:
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}p{0.22\textwidth}X X@{}}
+\toprule
+Node & Input and operation & Output \\
+\midrule
+\texttt{Field} & one named primitive field from every entity row &
+aligned raw values before the selected transform \\
+\texttt{Linear} & required or optional upstream nodes and declared weights &
+weighted value per entity, optionally normalized by available absolute weight \\
+\midrule
+\multicolumn{3}{@{}l@{}}{\texttt{Identity}, \texttt{ZScore},
+\texttt{Rank}, \texttt{Percentile}, and \texttt{RankZScore}} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Node declaration order is not execution order.  The engine resolves
+dependencies topologically and returns values in declaration order.  Duplicate
+rows or nodes, empty identifiers, duplicate inputs, non-finite weights, cycles,
+and unknown required dependencies fail the update.  A missing required value
+suppresses that entity's linear output; an optional dependency may be absent.
+
+\section{Cross-sectional algebra}
+
+For node \(j\) and entity \(i\), let \(x_{ij}\) be a raw current value.
+The engine can publish raw values, ordinary z-scores, ranks, percentiles, or
+rank z-scores.  A simple linear composite is
+\[
+  c_i = \mathcal N\!\left(
+    \frac{\sum_{j\in A_i}w_jx_{ij}}
+         {\sum_{j\in A_i}|w_j|}
+  \right),
+\]
+where \(A_i\) is the set of available dependencies for entity \(i\) and
+\(\mathcal N\) is the declared output transform.  The denominator is used only
+when \texttt{normalize\_weights} is true; otherwise the raw weighted sum is
+transformed.  A zero available denominator emits no value.
+
+\section{Resident state and incremental work}
+
+The engine retains only the last successfully completed generation as a
+monotonicity guard.  Every accepted update supplies complete rows and node
+specifications and recalculates the graph; there are no built-in price
+histories, session accumulators, alias registries, or cross-generation
+incremental cache.
+
+The natural extension is change-directed evaluation:
+\[
+  \Delta X_g \longrightarrow
+  \{\phi:\operatorname{deps}(\phi)\cap\Delta X_g\ne\varnothing\}
+  \longrightarrow \Delta Y_g.
+\]
+In a future incremental engine, only nodes whose dependency cones intersect
+changed cells would need to run.
+Logical generation and event time must remain part of the cache key; otherwise
+a fast cache can quietly return a value computed from the wrong observation
+boundary.
+
+\section{Hot state, persistence, and transport}
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[node distance=7mm and 7mm]
+  \node[slicemeta] (input) {\textbf{Caller or injector}\\complete update};
+  \node[slicehot, right=of input] (cube) {\textbf{HypercubeEngine}\\validate and evaluate};
+  \node[slicehot, right=of cube] (snapshot) {\textbf{Snapshot}\\values and status};
+  \node[sliceaction, right=of snapshot] (publish) {\textbf{Outputs}\\slices, HTTP/SSE, or terminal};
+  \draw[sliceflow] (input) -- (cube);
+  \draw[sliceflow] (cube) -- (snapshot);
+  \draw[sliceflow] (snapshot) -- (publish);
+\end{tikzpicture}
+\caption{The implemented public path.  Vendor feeds, durable persistence,
+replication, and production gateways are outside the repository.}
+\label{fig:system}
+\end{figure}
+
+\texttt{SlicePublisher} writes one configured \(f64\) slice per selected node
+and publishes \texttt{layout.json} and \texttt{catalog.json}.  Those files are
+independently coherent; the in-process \texttt{Snapshot} is the coherent
+whole-generation object.  The synthetic server also serves a dependency-free
+browser dashboard, a JSON snapshot, and an SSE stream.  The \texttt{etf} and
+\texttt{pairs} examples run separate top-like terminal monitors over basket
+premiums and cointegrating residuals.  These paths make the architecture
+inspectable without external services.
+
+The version-1 file ABI and Rust readers are a public local API, not a remote
+service contract.  The example server has no authentication, entitlement,
+backpressure, or production reconnect guarantees.  Vendor feeds, durable
+stores, host-to-host transport, and a governed gateway require separate
+adapters and policies; none is hidden in the public engine.
+
+\part{Composable Cells}
+
+\section{From values to functions}
+
+The current cube materializes primitive values and runs a fixed set of node
+types.  The general cell model is
+\[
+  c=(\tau,\sigma,\pi,\nu),
+\]
+where \(\tau\) is a value type, \(\sigma\) is shape and dimension metadata,
+\(\pi\) is provenance and publication state, and \(\nu\) is either a
+materialized value or a typed expression.
+
+For a function cell,
+\[
+  c_j := \phi_j(c_{i_1},\ldots,c_{i_k};\theta_j),
+\]
+the registry stores the function identity and version, typed inputs,
+parameters \(\theta_j\), output shape, missing-data policy, and permitted
+state.  The dependency graph is explicit.  Acyclic pure expressions can be
+topologically evaluated; windowed or recursive expressions require declared
+state and logical-time semantics.
+
+Composability comes from retaining the same cell contract at each stage.  A
+quote midpoint can feed a return; returns can feed factors; factors can feed a
+portfolio or index; the resulting discrepancy can feed a decision rule.  Each
+output remains addressable, versioned, and independently inspectable.
+
+\section{Function classes}
+
+Not every function should have the same authority:
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}p{0.17\textwidth}p{0.25\textwidth}X@{}}
+\toprule
+Class & Examples & Contract \\
+\midrule
+pure scalar/vector & midpoint, return, dot product, normalization &
+deterministic for a generation; no hidden I/O \\
+stateful analytic & VWAP, rolling covariance, session range &
+declared state, clock, retention, reset, and replay semantics \\
+model inference & learned score, volatility estimate &
+versioned artifact, features, calibration, and resource limits \\
+decision & threshold, rebalance proposal, hedge intent &
+produces an intent and explanation; no execution authority \\
+effect adapter & send order, alert, persist, publish &
+explicit capability, idempotency, audit, timeout, and failure policy \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The distinction between a decision and an effect is structural.  A function
+cell may calculate that a discrepancy exceeds a threshold.  It should not
+silently turn a read of that cell into an order.  Effect adapters consume
+published decision intents only after checking generation, freshness,
+entitlement, position limits, market state, and a unique action key.
+
+\section{ETF and index example}
+
+Consider an ETF \(e\) with constituent quantities \(q_{ei}\), local prices
+\(p_i(t)\), currency conversion rates \(x_i(t)\), cash and accrued value
+\(C_e(t)\), liabilities \(L_e(t)\), and shares outstanding \(N_e(t)\).  A
+simplified computed value per share is
+\[
+  \widehat V_e(t)=
+  \frac{C_e(t)-L_e(t)+\sum_i q_{ei}p_i(t)x_i(t)}
+       {N_e(t)}.
+\]
+An index uses analogous constituent arithmetic with its declared weights,
+corporate-action rules, and divisor.  The observed ETF midpoint \(m_e(t)\)
+gives a discrepancy
+\[
+  \delta_e(t)=m_e(t)-\widehat V_e(t),\qquad
+  \delta^{\mathrm{bps}}_e(t)=
+  10^4\frac{m_e(t)-\widehat V_e(t)}{\widehat V_e(t)}.
+\]
+
+In the cube, each input is an aligned slice or a declared keyed join:
+\begin{align*}
+  P_g &= \text{constituent price vector},\\
+  X_g &= \text{currency conversion vector},\\
+  Q_{e,g} &= \text{holdings vector},\\
+  \widehat V_{e,g} &=
+    \phi_{\mathrm{nav}}(P_g,X_g,Q_{e,g},C_{e,g},L_{e,g},N_{e,g}),\\
+  \delta_{e,g} &= \phi_{\mathrm{delta}}(m_{e,g},\widehat V_{e,g}).
+\end{align*}
+The calculation is accepted only when price, FX, holdings, cash, liabilities,
+and share count satisfy their observation and generation policies.  Holdings
+from last night's file may be valid with an explicit as-of time; a stale FX
+rate may not be.  The cell graph makes those choices visible.
+
+\subsection{Runnable ETF monitor}
+
+The checked-in \texttt{etf} example implements a compact version of the basket
+calculation.  It creates stable synthetic constituents and long-only baskets
+whose weights sum to one.  For ETF \(j\), it forms a basket return and advances
+fair value along the constituent axis:
+\[
+  r^{\mathrm{NAV}}_{j,g}=\sum_{i=1}^{N} w_{ji}r_{i,g},
+  \qquad
+  V_{j,g}=V_{j,g-1}(1+r^{\mathrm{NAV}}_{j,g}).
+\]
+The simulated ETF price is \(P_{j,g}=V_{j,g}(1+u_{j,g})\), where the fractional
+premium follows
+\[
+  u_{j,g}=\phi u_{j,g-1}+\sigma\eta_{j,g},
+  \qquad \phi=0.88,\quad \sigma=0.00040.
+\]
+The terminal reports premium in basis points and against the stationary model
+standard deviation:
+\[
+  q_{j,g}=10^4\frac{P_{j,g}-V_{j,g}}{V_{j,g}},
+  \qquad
+  z_{j,g}=\frac{u_{j,g}}{\sigma/\sqrt{1-\phi^2}}.
+\]
+Hypercube publishes ETF-aligned fair values, prices, premiums, model
+\(z\)-scores, and cross-sectional premium ranks.  This keeps the two axes
+explicit: basket arithmetic reduces a constituent vector to one ETF value; a
+Hypercube node produces another aligned ETF vector.
+
+\subsection{Runnable pairs monitor}
+
+The \texttt{pairs} example gives each pair a stable identity and two price
+paths.  Leg \(B\) carries a stochastic trend, while leg \(A\) shares it through
+hedge ratio \(\beta_j\).  Their cointegrating residual is
+\[
+  y_{j,g}=\log A_{j,g}-\alpha_j-\beta_j\log B_{j,g},
+  \qquad
+  y_{j,g}=\phi_j y_{j,g-1}+\sigma_j\eta_{j,g}.
+\]
+The graph publishes current prices, the standardized residual, model
+half-life, and a cross-sectional rank of absolute residual size:
+\[
+  z_{j,g}=\frac{y_{j,g}}{\sigma_j/\sqrt{1-\phi_j^2}},
+  \qquad
+  h_j=\frac{\log(1/2)}{\log\phi_j}.
+\]
+The table shows the largest live dislocations and the sign-implied hedged
+position.  Fixed parameters keep the example readable; estimation,
+stationarity tests, structural breaks, costs, borrow, and exposure controls
+remain outside it.
+
+\begin{figure}[ht]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[node distance=6mm and 8mm]
+  \node[slicehot] (px) {constituent prices};
+  \node[slicehot, below=of px] (fx) {FX conversion};
+  \node[slicemeta, below=of fx] (hold) {holdings / divisor};
+  \node[slicehot, right=16mm of fx] (fair) {computed ETF/index value};
+  \node[slicehot, above=of fair] (obs) {observed market value};
+  \node[sliceaction, right=of fair] (delta) {delta and diagnostics};
+  \node[sliceaction, right=of delta] (intent) {bounded trade intent};
+  \node[slicemeta, right=of intent] (effect) {authorized executor};
+  \draw[sliceflow] (px.east) -- (fair.west);
+  \draw[sliceflow] (fx.east) -- (fair.west);
+  \draw[sliceflow] (hold.east) -- (fair.west);
+  \draw[sliceflow] (fair) -- (delta);
+  \draw[sliceflow] (obs.east) -- (delta.west);
+  \draw[slicefuture] (delta) -- (intent);
+  \draw[slicefuture] (intent) -- (effect);
+\end{tikzpicture}%
+}
+\caption{The calculation is already vector-shaped.  Dashed edges mark future
+decision and effect layers, not current slice behavior.}
+\label{fig:etf}
+\end{figure}
+
+The same pattern supports baskets, hedges, factor-mimicking portfolios, risk
+decompositions, and observed-versus-model residuals.  The significant
+abstraction is not the ETF formula itself.  It is the ability to compose
+versioned values and functions while preserving a coherent generation and an
+explicit effect boundary.
+
+\section{Action boundary}
+
+A future trading adapter should accept an immutable intent:
+\[
+  I=(g,\text{strategy},\text{instrument},q,\text{limit},
+     \text{expiry},\text{evidence},k),
+\]
+where \(k\) is an idempotency key.  Before submission it must verify:
+\begin{enumerate}
+  \item generation \(g\) is decision-grade and within its freshness budget;
+  \item the calculation, model, and policy versions are approved;
+  \item the account has authority for the instrument and action;
+  \item position, notional, liquidity, price, and loss limits pass;
+  \item the market is in an allowed session and no kill switch is active;
+  \item action key \(k\) has not already been consumed.
+\end{enumerate}
+
+The executor records acknowledgement, rejection, fill, and cancellation events
+back into the evidence path.  These events may become new cube inputs, but the
+dependency must not create an unbounded accidental feedback loop.  Stateful
+control policies need explicit cycle semantics, rate limits, and termination
+conditions.
+
+\part{Implementation and Evidence}
+
+\section{Current implementation}
+
+The repository contains two principal Rust crates:
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}p{0.22\textwidth}X X@{}}
+\toprule
+Component & Implemented responsibilities & Present boundary \\
+\midrule
+\texttt{hypercube-slice} &
+layout and catalog validation; versioned headers; \(f64\), quote, trade, and
+TAQ mappings; point and vector readers/writers; stable snapshots, sums, dot
+products, and top-absolute scans &
+little-endian; one writer per slice; local file-backed mappings \\
+\texttt{hypercube-engine} &
+generation-checked updates; field and linear nodes; five cross-sectional
+transforms; deterministic snapshots and status; output
+\texttt{SlicePublisher}; generic and OU market injectors; HTTP/SSE plus
+\texttt{etf} and \texttt{pairs} terminal demonstrations &
+complete in-process rows per update; no vendor adapter, persistence, general
+function cells, or production web service \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The slice crate supplies fixed quote, trade, and TAQ record schemas but does
+not ingest a live feed.  Callers own the meanings and provenance of records
+they publish.  The engine accepts ordinary in-process rows rather than reading
+input slices directly.  Its publisher projects selected calculated nodes into
+\(f64\) slices sharing one entity layout; it does not publish factor-family
+rollups, portfolio projections, or application-specific summaries.
+
+\section{Scale model and reproducible baseline}
+
+For \(F\) published nodes and \(N\) entities, dense \(f64\) payloads use
+approximately
+\[
+  8FN\ \text{bytes}
+\]
+plus one 256-byte header per slice.  The checked-in semi-live smoke run uses
+eight entities and five nodes.  It emits 40 cell values and five 320-byte
+slices:
+\[
+  256 + 8\cdot 8 = 320\ \text{bytes per slice}.
+\]
+The dashboard, JSON snapshot, and SSE stream expose that same state.  This is
+a functional and packaging baseline, not a latency or throughput benchmark;
+the public repository makes no development-host performance claim.
+
+\section{Conformance tests}
+
+The current workspace has thirteen Rust tests:
+\begin{enumerate}
+  \item six engine, publisher, and synthetic-injector tests cover dependency
+        cycles, stale generations, tie-aware ranking, deterministic generic and
+        OU market input, and aligned publication;
+  \item seven slice tests cover layouts and catalogs, format compatibility,
+        \(f64\) vector reads and dot products, heartbeat semantics, and quote,
+        trade, and TAQ records.
+\end{enumerate}
+
+Foreign-language byte fixtures, high-contention stress, interrupted writers,
+cross-process x86-64 and aarch64 evidence, immutable generation pinning, and
+crash recovery remain conformance work.  Performance reports should state
+entity count, slice count, update
+distribution, writer rate, reader count, operation, page residency, CPU
+architecture, flush policy, and percentile methodology.  Useful
+measurements include point-read latency, stable-vector latency, retries per
+accepted read, generation publish time, changed-shard bytes, and end-to-end
+input-to-node-to-publication latency.
+
+\section{Limits}
+
+The current implementation establishes a credible vertical slice, not a
+finished universal memory system:
+\begin{itemize}
+  \item published output vectors are stable per slice but not globally atomic
+        across the complete output set;
+  \item vector readers use optimistic retry and can fail to progress within a
+        fixed budget under sustained writes;
+  \item shared atomic and payload behavior requires explicit cross-process,
+        cross-language, x86-64, and aarch64 conformance evidence;
+  \item layouts are stable while running; dynamic mutation requires a new
+        layout and coordinated publication;
+  \item replication and general live gateway generation protocols remain
+        separate work;
+  \item vendor ingestion, durable persistence, and direct input-slice adapters
+        are outside the public repository;
+  \item the hypercube is a typed calculation runtime, but arbitrary function
+        cells, automatic incremental invalidation, model sandboxing, and GPU
+        lowerings are not implemented;
+  \item action cells and trading authority are future architecture and must
+        not be implied by the presence of a calculated discrepancy.
+\end{itemize}
+
+These limits are part of the contribution.  They identify where a simple
+memory-mapped vector is sufficient and where stronger publication, lifecycle,
+or authority semantics are required.
+
+\section{Open-source research sequence}
+
+Starting from the current public version, development can proceed in bounded
+stages:
+\begin{enumerate}
+  \item stabilize the published format, layout and catalog schemas, Rust
+        implementation, synthetic fixture, and current conformance tests;
+  \item add portable readers and an ABI corpus that proves the same bytes have
+        the same meaning outside Rust;
+  \item benchmark point counters and vector epochs under declared writer and
+        reader loads on x86-64 and aarch64;
+  \item implement a general immutable generation manifest with reader pinning,
+        crash recovery, and optional changed-shard publication;
+  \item formalize typed pure and stateful function-cell interfaces, dependency
+        identity, change propagation, and replay equivalence;
+  \item build the ETF/index example through fair value and discrepancy as a
+        deterministic reference application;
+  \item specify decision intents and a simulated effect adapter before any
+        connection to live execution.
+\end{enumerate}
+
+Each stage should be useful independently.  A community member may only need a
+fast stable-layout shared vector, a factor researcher may use the replay/live
+hypercube contract, and a systems researcher may focus on multi-slice
+generation consistency.  The project does not need to expose trading authority
+to make its memory and composition model valuable.
+
+\section{Conclusion}
+
+\SLICE{} reduces current analytical state to a small, inspectable
+contract: fixed typed cells, stable entity slots, versioned headers, and
+reader-lockless publication protocols.  The hypercube restores the dimensions
+that a raw vector alone cannot express---entity, primitive field, calculated
+node, and generation---while keeping common operations compatible with
+ordinary linear algebra.  Applications may add factor, horizon, universe, and
+provenance coordinates without changing the version-1 core.
+
+The concurrency design is intentionally plural.  Per-slot counters serve
+independently changing point state and slice epochs serve stable vector scans.
+Immutable generation manifests are the proposed stronger class for coherent
+multi-vector decisions.  This
+avoids locking an entire analytical universe for every market change without
+pretending that all consumers can accept the same consistency.
+
+Function cells would extend the model from shared values to a richer shared
+computation graph.  Pure and explicitly stateful nodes could compose data into
+returns, factors, portfolios, ETF or index values, and observed-model
+residuals.  Decision nodes may produce bounded intents, but effects remain
+behind a separately governed adapter.  That separation lets composability grow
+without allowing convenience to erase provenance, freshness, or authority.
+
+The germinal system is therefore already present: a live memory plane, an
+aligned multidimensional calculation model, and versioned outputs that can be
+read repeatedly at low cost.  The open-source work is to make its guarantees
+portable, its generation semantics complete, its benchmarks reproducible, and
+its function boundary explicit.
+
+\begin{thebibliography}{9}
+
+\bibitem{posixmmap}
+The Open Group,
+\emph{POSIX.1-2024: mmap---Map Pages of Memory},
+\url{https://pubs.opengroup.org/onlinepubs/9799919799/functions/mmap.html}.
+
+\bibitem{arrow}
+Apache Arrow Project,
+\emph{Arrow Columnar Format},
+\url{https://arrow.apache.org/docs/format/Columnar.html}.
+
+\bibitem{scidb}
+M. Stonebraker, P. Brown, D. Zhang, and J. Becla,
+\emph{SciDB: A Database Management System for Applications with Complex
+Analytics},
+Computing in Science \& Engineering, 15(3), pp.~54--62, 2013,
+\url{https://doi.org/10.1109/MCSE.2013.19}.
+
+\bibitem{blas}
+C. L. Lawson, R. J. Hanson, D. R. Kincaid, and F. T. Krogh,
+\emph{Basic Linear Algebra Subprograms for FORTRAN Usage},
+ACM Transactions on Mathematical Software, 5(3), pp.~308--323, 1979,
+\url{https://doi.org/10.1145/355841.355847}.
+
+\bibitem{seqlock}
+Linux Kernel Documentation,
+\emph{Sequence Counters and Sequential Locks},
+\url{https://www.kernel.org/doc/html/latest/locking/seqlock.html}.
+
+\bibitem{rcu}
+Linux Kernel Documentation,
+\emph{RCU Concepts},
+\url{https://docs.kernel.org/RCU/rcu.html}.
+
+\bibitem{snapshot}
+H. Berenson, P. Bernstein, J. Gray, J. Melton, E. O'Neil, and P. O'Neil,
+\emph{A Critique of ANSI SQL Isolation Levels},
+SIGMOD, pp.~1--10, 1995,
+\url{https://doi.org/10.1145/223784.223785}.
+
+\bibitem{adaptive}
+U. A. Acar, G. E. Blelloch, and R. Harper,
+\emph{Adaptive Functional Programming},
+ACM Transactions on Programming Languages and Systems, 28(6),
+pp.~990--1034, 2006,
+\url{https://doi.org/10.1145/1186632.1186634}.
+
+\bibitem{differential}
+F. McSherry, D. G. Murray, R. Isaacs, and M. Isard,
+\emph{Differential Dataflow},
+CIDR, 2013,
+\url{https://www.cidrdb.org/cidr2013/Papers/CIDR13_Paper111.pdf}.
+
+\end{thebibliography}
+
+\end{document}

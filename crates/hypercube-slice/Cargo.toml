@@ -1,0 +1,26 @@
+[package]
+name = "hypercube-slice"
+description = "Typed memory-mapped vectors for live multidimensional analytics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["mmap", "analytics", "vector", "shared-memory"]
+categories = ["data-structures", "memory-management"]
+
+[lib]
+name = "hypercube_slice"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow.workspace = true
+memmap2 = "0.9"
+serde.workspace = true
+serde_json.workspace = true
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
+
+[dev-dependencies]
+tempfile = "3.14"
+

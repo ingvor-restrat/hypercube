@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hypercube — synthetic equity monitor</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #edf2f7;
+      --muted: #8b9aae;
+      --panel: rgba(17, 25, 38, .88);
+      --line: rgba(148, 163, 184, .17);
+      --cyan: #34d7e8;
+      --amber: #f7b955;
+      --rose: #ff718a;
+      --bg: #080d16;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 15% 10%, rgba(20, 90, 116, .32), transparent 30rem),
+        radial-gradient(circle at 90% 20%, rgba(100, 45, 91, .24), transparent 32rem),
+        var(--bg);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main { width: min(1320px, calc(100% - 36px)); margin: 0 auto; padding: 32px 0 48px; }
+    header { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
+    .eyebrow { color: var(--cyan); font: 600 12px/1.2 ui-monospace, monospace; letter-spacing: .16em; text-transform: uppercase; }
+    h1 { margin: 8px 0 5px; font-size: clamp(29px, 5vw, 54px); font-weight: 620; letter-spacing: -.045em; }
+    .lede { color: var(--muted); margin: 0; max-width: 680px; line-height: 1.55; }
+    #connection { color: var(--amber); font: 600 12px/1.2 ui-monospace, monospace; white-space: nowrap; }
+    #connection.live { color: var(--cyan); }
+    .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px; }
+    .metric, .panel {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, .22);
+      backdrop-filter: blur(12px);
+    }
+    .metric { border-radius: 14px; padding: 15px 17px; }
+    .metric span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+    .metric strong { font: 600 21px/1.2 ui-monospace, monospace; }
+    .grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: 12px; }
+    .panel { min-height: 310px; border-radius: 18px; padding: 18px; overflow: hidden; }
+    .panel.wide { grid-column: 1 / -1; min-height: 280px; }
+    .panel h2 { font-size: 14px; letter-spacing: .01em; margin: 0 0 4px; }
+    .panel p { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+    canvas { display: block; width: 100%; height: 235px; }
+    .wide canvas { height: 205px; }
+    code { font-family: ui-monospace, monospace; color: #b9c9db; }
+    @media (max-width: 800px) {
+      header { align-items: start; flex-direction: column; }
+      .metrics { grid-template-columns: repeat(2, 1fr); }
+      .grid { grid-template-columns: 1fr; }
+      .panel.wide { grid-column: auto; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <div class="eyebrow">Synthetic equity cross-section</div>
+        <h1>Hypercube</h1>
+        <p class="lede">A simulated equity cross-section enters one declared calculation graph. Every output below is also published as an entity-aligned memory-mapped slice.</p>
+      </div>
+      <div id="connection">CONNECTING</div>
+    </header>
+
+    <section class="metrics">
+      <div class="metric"><span>Generation</span><strong id="generation">—</strong></div>
+      <div class="metric"><span>Entities</span><strong id="entities">—</strong></div>
+      <div class="metric"><span>Nodes</span><strong id="nodes">—</strong></div>
+      <div class="metric"><span>Published</span><strong id="published">—</strong></div>
+    </section>
+
+    <section class="grid">
+      <article class="panel">
+        <h2>Residual-move score</h2>
+        <p><code>z(0.75 rank-z(ε) + 0.25 z(log dollar volume))</code></p>
+        <canvas id="bars"></canvas>
+      </article>
+      <article class="panel">
+        <h2>Generation history</h2>
+        <p>Cross-sectional mean price and maximum absolute score.</p>
+        <canvas id="history"></canvas>
+      </article>
+      <article class="panel wide">
+        <h2>Node × symbol grid</h2>
+        <p>Rows are named calculations; columns are stable symbols. Color is normalized within each row.</p>
+        <canvas id="node-grid"></canvas>
+      </article>
+    </section>
+  </main>
+
+  <script>
+    const history = [];
+    const connection = document.querySelector("#connection");
+    const source = new EventSource("/api/stream");
+    source.addEventListener("snapshot", event => {
+      const snapshot = JSON.parse(event.data);
+      connection.textContent = "LIVE · SSE";
+      connection.classList.add("live");
+      render(snapshot);
+    });
+    source.onerror = () => {
+      connection.textContent = "RECONNECTING";
+      connection.classList.remove("live");
+    };
+
+    function render(snapshot) {
+      const byNode = new Map();
+      snapshot.values.forEach(cell => {
+        if (!byNode.has(cell.node)) byNode.set(cell.node, []);
+        byNode.get(cell.node).push(cell);
+      });
+      document.querySelector("#generation").textContent = snapshot.generation;
+      document.querySelector("#entities").textContent = snapshot.entity_count;
+      document.querySelector("#nodes").textContent = snapshot.statuses.length;
+      document.querySelector("#published").textContent =
+        new Date(snapshot.observed_at_ms).toLocaleTimeString([], { hour12: false });
+
+      const prices = byNode.get("price") || [];
+      const scores = byNode.get("liquid_residual_score") || [];
+      history.push({
+        generation: snapshot.generation,
+        price: mean(prices.map(value => value.value)),
+        score: Math.max(0, ...scores.map(value => Math.abs(value.value)))
+      });
+      if (history.length > 90) history.shift();
+      drawBars(document.querySelector("#bars"), scores);
+      drawHistory(document.querySelector("#history"), history);
+      drawNodeGrid(document.querySelector("#node-grid"), byNode);
+    }
+
+    function setup(canvas) {
+      const ratio = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = Math.floor(rect.width * ratio);
+      canvas.height = Math.floor(rect.height * ratio);
+      const context = canvas.getContext("2d");
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      context.clearRect(0, 0, rect.width, rect.height);
+      return { context, width: rect.width, height: rect.height };
+    }
+
+    function drawBars(canvas, values) {
+      const { context, width, height } = setup(canvas);
+      const rows = [...values]
+        .sort((left, right) => Math.abs(right.value) - Math.abs(left.value))
+        .slice(0, 12);
+      const labelWidth = 78;
+      const center = labelWidth + (width - labelWidth) / 2;
+      const max = Math.max(1, ...rows.map(row => Math.abs(row.value)));
+      context.font = "11px ui-monospace, monospace";
+      context.textBaseline = "middle";
+      context.strokeStyle = "rgba(148,163,184,.2)";
+      context.beginPath();
+      context.moveTo(center, 2);
+      context.lineTo(center, height - 2);
+      context.stroke();
+      rows.forEach((row, index) => {
+        const y = 9 + index * ((height - 18) / rows.length);
+        const barHeight = Math.max(4, (height - 28) / rows.length);
+        const length = Math.abs(row.value) / max * (width - labelWidth) * .45;
+        context.fillStyle = "#8b9aae";
+        context.textAlign = "left";
+        context.fillText(row.key, 0, y + barHeight / 2);
+        context.fillStyle = row.value >= 0 ? "#34d7e8" : "#ff718a";
+        context.fillRect(row.value >= 0 ? center : center - length, y, length, barHeight);
+      });
+    }
+
+    function drawHistory(canvas, points) {
+      const { context, width, height } = setup(canvas);
+      const pad = 16;
+      context.strokeStyle = "rgba(148,163,184,.15)";
+      for (let line = 0; line < 5; line++) {
+        const y = pad + line * (height - pad * 2) / 4;
+        context.beginPath();
+        context.moveTo(pad, y);
+        context.lineTo(width - pad, y);
+        context.stroke();
+      }
+      drawSeries(context, points.map(point => point.price), width, height, "#34d7e8", pad);
+      drawSeries(context, points.map(point => point.score), width, height, "#f7b955", pad);
+      context.font = "11px ui-monospace, monospace";
+      context.fillStyle = "#34d7e8";
+      context.fillText("mean price", pad, 12);
+      context.fillStyle = "#f7b955";
+      context.fillText("max |score|", pad + 92, 12);
+    }
+
+    function drawSeries(context, values, width, height, color, pad) {
+      if (values.length < 2) return;
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const range = Math.max(max - min, 1e-9);
+      context.strokeStyle = color;
+      context.lineWidth = 1.7;
+      context.beginPath();
+      values.forEach((value, index) => {
+        const x = pad + index / Math.max(values.length - 1, 1) * (width - pad * 2);
+        const y = height - pad - (value - min) / range * (height - pad * 2);
+        index ? context.lineTo(x, y) : context.moveTo(x, y);
+      });
+      context.stroke();
+    }
+
+    function drawNodeGrid(canvas, byNode) {
+      const { context, width, height } = setup(canvas);
+      const names = [...byNode.keys()];
+      const keys = [...new Set([...byNode.values()].flat().map(value => value.key))].sort();
+      const labelWidth = 158;
+      const top = 4;
+      const cellWidth = Math.max(1, (width - labelWidth) / Math.max(keys.length, 1));
+      const cellHeight = (height - top) / Math.max(names.length, 1);
+      context.font = "11px ui-monospace, monospace";
+      context.textBaseline = "middle";
+      names.forEach((name, row) => {
+        const values = new Map(byNode.get(name).map(value => [value.key, value.value]));
+        const finite = [...values.values()].filter(Number.isFinite);
+        const center = mean(finite);
+        const scale = Math.max(1e-9, ...finite.map(value => Math.abs(value - center)));
+        context.fillStyle = "#8b9aae";
+        context.fillText(name, 0, top + (row + .5) * cellHeight);
+        keys.forEach((key, column) => {
+          const value = values.get(key);
+          const x = labelWidth + column * cellWidth;
+          const y = top + row * cellHeight;
+          if (!Number.isFinite(value)) {
+            context.fillStyle = "rgba(148,163,184,.08)";
+          } else {
+            const normalized = Math.max(-1, Math.min(1, (value - center) / scale));
+            context.fillStyle = normalized >= 0
+              ? `rgba(52,215,232,${.12 + normalized * .82})`
+              : `rgba(255,113,138,${.12 + -normalized * .82})`;
+          }
+          context.fillRect(x + .5, y + .5, Math.max(0, cellWidth - 1), Math.max(0, cellHeight - 1));
+        });
+      });
+    }
+
+    function mean(values) {
+      return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+    }
+  </script>
+</body>
+</html>
