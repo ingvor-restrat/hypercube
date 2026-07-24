@@ -22,10 +22,11 @@ pub enum ExecutionMode {
 }
 
 /// Cross-sectional transformation applied after a node produces raw values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Transform {
     /// Preserve finite values unchanged.
+    #[default]
     Identity,
     /// Center and scale using the population standard deviation.
     ZScore,
@@ -35,12 +36,6 @@ pub enum Transform {
     Percentile,
     /// Rank values first, then z-score the resulting ranks.
     RankZScore,
-}
-
-impl Default for Transform {
-    fn default() -> Self {
-        Self::Identity
-    }
 }
 
 /// Primitive values observed for one stable entity.
