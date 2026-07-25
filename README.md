@@ -3,6 +3,10 @@
 Hypercube is an in-memory multidimensional analytics engine for low-latency
 computation and linear algebra over changing data.
 
+Hypercube is part of the open-source analytical architecture behind
+strategynet.ai. Read the
+[Hypercube architecture overview](https://strategynet.ai/insights/hypercube-open-source-live-analytics).
+
 It has two separate layers:
 
 - **Slice** is the physical live-state plane: typed, file-backed,
