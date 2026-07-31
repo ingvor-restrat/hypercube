@@ -21,9 +21,12 @@ synthetic or external input
               |
               v
        immutable snapshot
-          |         |
-          v         v
-     .slice files   API/SSE views
+       |       |          |
+       v       v          v
+  .slice files API/SSE  Disruptor circuit
+                           |
+                           v
+                    state/transitions
 ```
 
 ## Coordinate model
@@ -45,6 +48,11 @@ entity.
 The graph is pure: it emits calculated snapshots but has no authority to
 perform external actions.
 
+`hypercube-circuit` preserves that boundary. It receives an already coherent
+snapshot and provides ordered, stateful processing with logical generation
+time. Replay creates fresh engine and processor state. Transports, persistence,
+and any external-effect adapters remain outside the graph.
+
 ## Publication model
 
 A snapshot is coherent in process. `SlicePublisher` projects selected node
@@ -55,6 +63,36 @@ across all slices.
 Applications requiring multi-slice decision consistency should consume the
 in-process snapshot or add a generation manifest and reader-pinning protocol.
 That stronger protocol is intentionally not implied by version 1.
+
+## Replay model
+
+The implemented replay boundary records each complete Hypercube `Update`, the
+resulting semantic snapshot digest, and complete trigger state plus
+transitions. The digest ignores live-versus-replay mode and runtime timing
+while retaining exact value bits, statuses, entity ordering, generation, and
+observation time.
+
+The development adapter stores versioned JSON Lines. The same manifest and
+generation envelopes map to Aeron Archive messages; source positions identify
+the last event from each upstream stream included in a generation. Replay
+outputs belong in a separate namespace and must not reach execution authority.
+See the [record/replay contract](replay.md).
+
+## Backpressure and truth
+
+The ring is an execution boundary, not the system of record, and does not make
+an overloaded consumer correct by itself. Nonblocking circuit submission
+returns `RingFull`; it never silently overwrites an unprocessed generation.
+The owner must then apply an explicit policy:
+
+- slow or backpressure the producer on a correctness-critical lane;
+- retain the raw input in Aeron Archive and catch up from its position;
+- coalesce or drop only a separately identified best-effort view.
+
+`CaptureSession` uses lockstep processing and recording, so its engine does not
+advance again until the stateful generation completes. Where the market-data
+source cannot be slowed, archive the normalized input first and let generation
+assembly advance from that durable log.
 
 ## Extraction boundary
 
@@ -71,4 +109,3 @@ The public engine contains reusable mechanics:
 Vendor feeds, transports, persistence adapters, proprietary factor
 definitions, live host operations, portfolio construction, and execution
 authority stay outside this repository.
-

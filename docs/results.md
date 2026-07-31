@@ -1,6 +1,6 @@
 # Reproducible Results
 
-These functional results were recorded for Hypercube 0.1.0 on 24 July 2026.
+These functional results were recorded for Hypercube 0.1.0 on 30 July 2026.
 They validate behavior and packaging; they are not performance benchmarks.
 
 ## Test suite
@@ -17,14 +17,17 @@ Result:
 | engine, publisher, and synthetic injectors | 6 | passed |
 | ETF and pairs example invariants | 2 | passed |
 | slice layout, catalog, mmap, records, and vector algebra | 7 | passed |
-| **Total** | **15** | **passed** |
+| circuit, triggers, recording, digest, and replay | 14 | passed |
+| **Total** | **29** | **passed** |
 
 The suite includes dependency-cycle rejection, stale-generation rejection,
 tie-aware ranking, deterministic generic and OU market injection, long-only
 ETF basket weights, reconstruction of the declared pair residual, aligned
-publication, layout
-mismatch rejection, live heartbeat observation, quote/trade/TAQ records, and
-guarded dot products.
+publication, layout mismatch rejection, live heartbeat observation,
+quote/trade/TAQ records, guarded dot products, ordered Disruptor processing,
+persistent and hysteretic trigger transitions, missing-data invalidation,
+recording validation, non-finite input rejection, exact floating-point JSON
+round trips, semantic divergence detection, and fresh-state replay.
 
 ## Documentation contract
 
@@ -32,9 +35,25 @@ guarded dot products.
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```
 
-Both crates build their complete public API documentation without warnings.
-Missing public documentation is enabled at the crate level, and CI promotes
-warnings to errors for the documentation build.
+All three crates build their complete public API documentation without
+warnings. Missing public documentation is enabled at the crate level, and CI
+promotes warnings to errors for the documentation build.
+
+## Record/replay smoke run
+
+Commands:
+
+```bash
+cargo run --quiet -p hypercube-circuit --bin hypercube-replay -- \
+  record-demo /tmp/hypercube-factor.jsonl 40 32
+
+cargo run --quiet -p hypercube-circuit --bin hypercube-replay -- \
+  verify /tmp/hypercube-factor.jsonl
+```
+
+The recording contained one manifest and 40 complete generations. Replay
+recalculated 6,400 factor cells through a fresh engine and reproduced 1,280
+trigger-state cells and all 78 transitions, with zero divergent generations.
 
 ## Semi-live smoke run
 
@@ -103,4 +122,5 @@ executable arbitrage after costs.
 `hypercube-slice` packages and verifies independently. `hypercube-engine`
 contains its dashboard asset in the crate archive and is released after the
 matching `hypercube-slice` version, because Cargo resolves published
-dependencies during package verification.
+dependencies during package verification. `hypercube-circuit` packages after
+the matching engine version for the same reason.

@@ -333,6 +333,15 @@ impl HypercubeEngine {
     ///
     /// A failed update leaves [`Self::last_generation`] unchanged.
     pub fn update(&mut self, update: Update) -> CubeResult<Snapshot> {
+        self.update_ref(&update)
+    }
+
+    /// Validate and evaluate one complete update without taking ownership.
+    ///
+    /// This is useful when the caller also needs to persist the accepted input
+    /// for deterministic replay. A failed update leaves
+    /// [`Self::last_generation`] unchanged.
+    pub fn update_ref(&mut self, update: &Update) -> CubeResult<Snapshot> {
         if let Some(previous) = self.last_generation {
             if update.generation <= previous {
                 return Err(CubeError::StaleGeneration {
@@ -341,7 +350,7 @@ impl HypercubeEngine {
                 });
             }
         }
-        validate_update(&update)?;
+        validate_update(update)?;
 
         let entity_times = update
             .rows

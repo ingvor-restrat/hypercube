@@ -15,6 +15,10 @@ It has two separate layers:
   generation, and entity dimensions evaluated as a deterministic dependency
   graph.
 
+The optional **Circuit** crate adds an ordered Disruptor stage around complete
+Hypercube generations. It hosts stateful callbacks, records their inputs and
+outputs, and can replay a run through fresh engine and callback state.
+
 Rows can represent financial instruments, sensors, services, experiments, or
 any other stable entity set. Hypercube does not include a database, message
 transport, vendor feed, or effectful action system.
@@ -77,6 +81,27 @@ cargo run -p hypercube-engine --example synthetic_server -- \
 The demo exposes `GET /api/snapshot` and an SSE stream at `GET /api/stream`.
 Its memory-mapped layout, catalog, and vectors are written beneath the selected
 slice directory.
+
+### Record and replay
+
+Record a deterministic factor calculation plus its persistent threshold state
+and transitions:
+
+```bash
+cargo run -p hypercube-circuit --bin hypercube-replay -- \
+  record-demo /tmp/hypercube-factor.jsonl 40 32
+```
+
+Recalculate it from a fresh engine and compare every generation:
+
+```bash
+cargo run -p hypercube-circuit --bin hypercube-replay -- \
+  verify /tmp/hypercube-factor.jsonl
+```
+
+The [replay guide](docs/replay.md) defines the exactness contract, stateful
+processing model, replay isolation rule, and the intended Aeron Archive
+mapping.
 
 ## Library API
 
@@ -141,6 +166,7 @@ reads, stable vector snapshots, sums, dot products, and top-absolute scans.
 ```text
 crates/hypercube        `hypercube-engine` package, demo, and dashboard
 crates/hypercube-slice  memory-mapped vector format and readers/writers
+crates/hypercube-circuit stateful Disruptor callbacks and record/replay
 docs                    guides, terminal recording, papers, and format notes
 ```
 
@@ -154,9 +180,12 @@ notes.
 
 ## Status
 
-The current format is version 1, little-endian, and designed for one writer
-with many readers. Multi-slice atomic generations, cross-language ABI fixtures,
-replication, and general stateful function cells remain future work.
+Slice format version 1 is little-endian and designed for one writer with many
+readers. Recording format version 1 captures complete Hypercube updates and
+deterministic threshold-trigger state and transitions. Multi-slice atomic
+generations, cross-language ABI fixtures, replication, raw-feed generation
+assembly, Aeron Archive adapters, checkpoints, and general stateful function
+cells remain future work.
 
 Continue with the
 [guided tour](docs/guide.md),
@@ -166,9 +195,12 @@ the
 [architecture boundary](docs/architecture.md),
 the
 [slice format](docs/slice-format.md),
+the
+[record/replay contract](docs/replay.md),
 and the
 [reproducible results](docs/results.md).
-The [long-form foundations paper](docs/latex/README.md)
-uses the current Slice and Hypercube API vocabulary.
+The [long-form papers](docs/latex/README.md) cover the Slice and Hypercube
+foundations in Part I, then stateful circuits and deterministic replay in
+Part II.
 
 Licensed under Apache-2.0.
