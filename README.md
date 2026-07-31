@@ -7,13 +7,12 @@ Hypercube is part of the open-source analytical architecture behind
 strategynet.ai. Read the
 [Hypercube architecture overview](https://strategynet.ai/insights/hypercube-open-source-live-analytics).
 
-It has two separate layers:
+The repository has two core parts:
 
-- **Slice** is the physical live-state plane: typed, file-backed,
-  memory-mapped vectors aligned to a stable entity layout.
-- **Hypercube** is the logical execution plane: field, derived-node,
-  generation, and entity dimensions evaluated as a deterministic dependency
-  graph.
+- **Slice files** are typed, file-backed, memory-mapped vectors aligned to a
+  stable entity layout.
+- **The Hypercube engine** evaluates fields and derived nodes over complete
+  entity generations.
 
 The optional **Circuit** crate adds an ordered Disruptor stage around complete
 Hypercube generations. It hosts stateful callbacks, records their inputs and
@@ -83,6 +82,14 @@ Its memory-mapped layout, catalog, and vectors are written beneath the selected
 slice directory.
 
 ### Record and replay
+
+Run the Hypercube callback and replay terminal demo:
+
+```bash
+cargo run -p hypercube-circuit --example circuit
+```
+
+[![Hypercube callback and replay recording](docs/markup/circuit-replay.gif)](docs/markup/README.md#hypercube-callbacks-triggers-and-replay)
 
 Record a deterministic factor calculation plus its persistent threshold state
 and transitions:
@@ -199,8 +206,7 @@ the
 [record/replay contract](docs/replay.md),
 and the
 [reproducible results](docs/results.md).
-The [long-form papers](docs/latex/README.md) cover the Slice and Hypercube
-foundations in Part I, then stateful circuits and deterministic replay in
-Part II.
+The [long-form papers](docs/latex/README.md) cover Hypercube foundations,
+callbacks, triggers, and replay.
 
 Licensed under Apache-2.0.

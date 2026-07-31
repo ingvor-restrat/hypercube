@@ -1,7 +1,29 @@
-# Hypercube: live financial examples
+# Hypercube: live examples
 
-Both recordings are generated from the checked-in programs. The market paths,
-terminal frames, and GIFs are deterministic for the recorded seed.
+All recordings are generated from checked-in programs. The inputs, terminal
+frames, and GIFs are deterministic.
+
+## Hypercube: callbacks, triggers, and replay
+
+![Persistent trigger state followed by an exact replay](circuit-replay.gif)
+
+Run it:
+
+```bash
+cargo run -p hypercube-circuit --example circuit
+```
+
+Each live frame is one completed Hypercube generation. The callback watches
+`liquid_residual_score`, requires two consecutive values at or above `1.0`,
+and exits at or below `0.5`. The terminal shows qualifying counts, active
+state, entry and exit events, and recent score paths.
+
+At generation 4 the example removes active entity `SIM0006`. The callback
+emits `INVALIDATED` rather than treating the missing input as a normal exit.
+After 28 generations, the example seals its in-memory JSON Lines recording
+and replays it through a fresh engine and fresh callback state. The final
+frame compares factor cells, trigger-state cells, and transitions and reports
+zero divergent generations.
 
 ## Hypercube: ETF Arbitrage
 
@@ -105,7 +127,7 @@ cargo run -q -p hypercube-engine --example pairs -- \
   --pairs 24 --top 10 --ticks 1 --no-color
 ```
 
-## Rebuild both recordings
+## Rebuild the recordings
 
 Run this from the repository root:
 
@@ -115,6 +137,13 @@ python3 -m venv .venv
 .venv/bin/python docs/markup/record.py
 ```
 
-The recorder invokes both programs in `--record` mode and writes
-[`etf.gif`](etf.gif) and [`pairs.gif`](pairs.gif). Seeds, dimensions, and frame
-counts are fixed so changes produce reviewable recordings.
+Pass a recording name to rebuild only one:
+
+```bash
+.venv/bin/python docs/markup/record.py circuit
+```
+
+The recorder invokes each program in `--record` mode and writes
+[`circuit-replay.gif`](circuit-replay.gif), [`etf.gif`](etf.gif), and
+[`pairs.gif`](pairs.gif). Seeds, dimensions, and frame counts are fixed so
+changes produce reviewable recordings.

@@ -4,8 +4,9 @@
 generation processing and a versioned replay contract.
 
 The companion
-[Part II paper](latex/hypercube_circuits.pdf) develops the architecture,
-failure contracts, applications, and executable evidence in one narrative.
+[callbacks, triggers, and replay paper](latex/hypercube_circuits.pdf) works
+through the callback flow, persistent-threshold example, recording format,
+replay commands, and demos.
 
 ```text
 live inputs

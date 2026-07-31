@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -15,14 +16,75 @@ RECORDINGS = [
     (
         "etf",
         Path(__file__).with_name("etf.gif"),
-        ["--entities", "160", "--funds", "12", "--top", "5"],
-        "335342",
+        [
+            "cargo",
+            "run",
+            "-q",
+            "-p",
+            "hypercube-engine",
+            "--example",
+            "etf",
+            "--",
+            "--record",
+            "--ticks",
+            "28",
+            "--entities",
+            "160",
+            "--funds",
+            "12",
+            "--top",
+            "5",
+            "--interval-ms",
+            "0",
+            "--seed",
+            "335342",
+        ],
     ),
     (
         "pairs",
         Path(__file__).with_name("pairs.gif"),
-        ["--pairs", "24", "--top", "10"],
-        "335341",
+        [
+            "cargo",
+            "run",
+            "-q",
+            "-p",
+            "hypercube-engine",
+            "--example",
+            "pairs",
+            "--",
+            "--record",
+            "--ticks",
+            "28",
+            "--pairs",
+            "24",
+            "--top",
+            "10",
+            "--interval-ms",
+            "0",
+            "--seed",
+            "335341",
+        ],
+    ),
+    (
+        "circuit",
+        Path(__file__).with_name("circuit-replay.gif"),
+        [
+            "cargo",
+            "run",
+            "-q",
+            "-p",
+            "hypercube-circuit",
+            "--example",
+            "circuit",
+            "--",
+            "--record",
+            "--ticks",
+            "28",
+            "--top",
+            "8",
+            "--interval-ms",
+            "0",
+        ],
     ),
 ]
 
@@ -100,11 +162,21 @@ def spans(line: str):
         yield line[position:], color, bold, dim
 
 
-def render(frame: str, regular, bold_font, label: str) -> Image.Image:
+def extent(frame: str) -> tuple[int, int]:
     clean_lines = frame.strip("\n").splitlines()
     visible = [ANSI.sub("", line) for line in clean_lines]
-    columns = max(map(len, visible))
-    rows = len(visible)
+    return max(map(len, visible)), len(visible)
+
+
+def render(
+    frame: str,
+    regular,
+    bold_font,
+    label: str,
+    columns: int,
+    rows: int,
+) -> Image.Image:
+    clean_lines = frame.strip("\n").splitlines()
     probe = Image.new("RGB", (1, 1))
     probe_draw = ImageDraw.Draw(probe)
     char_width = probe_draw.textlength("M", font=regular)
@@ -135,31 +207,12 @@ def render(frame: str, regular, bold_font, label: str) -> Image.Image:
 
 
 def record(
-    example: str,
+    label: str,
     output: Path,
-    options: list[str],
-    seed: str,
+    command: list[str],
     regular,
     bold_font,
 ) -> None:
-    command = [
-        "cargo",
-        "run",
-        "-q",
-        "-p",
-        "hypercube-engine",
-        "--example",
-        example,
-        "--",
-        "--record",
-        "--ticks",
-        "28",
-        *options,
-        "--interval-ms",
-        "0",
-        "--seed",
-        seed,
-    ]
     process = subprocess.run(
         command,
         cwd=ROOT,
@@ -173,8 +226,13 @@ def record(
         if frame.strip()
     ]
     if not frames:
-        raise RuntimeError(f"{example} produced no recording frames")
-    images = [render(frame, regular, bold_font, example) for frame in frames]
+        raise RuntimeError(f"{label} produced no recording frames")
+    extents = [extent(frame) for frame in frames]
+    columns = max(item[0] for item in extents)
+    rows = max(item[1] for item in extents)
+    images = [
+        render(frame, regular, bold_font, label, columns, rows) for frame in frames
+    ]
     images.extend([images[-1]] * 6)
     images[0].save(
         output,
@@ -189,10 +247,17 @@ def record(
 
 
 def main() -> None:
+    selected = set(sys.argv[1:])
+    known = {label for label, _, _ in RECORDINGS}
+    unknown = selected - known
+    if unknown:
+        raise SystemExit(f"unknown recording: {', '.join(sorted(unknown))}")
     regular = ImageFont.truetype(REGULAR_FONT, 15)
     bold_font = ImageFont.truetype(BOLD_FONT, 15)
-    for example, output, options, seed in RECORDINGS:
-        record(example, output, options, seed, regular, bold_font)
+    for label, output, command in RECORDINGS:
+        if selected and label not in selected:
+            continue
+        record(label, output, command, regular, bold_font)
 
 
 if __name__ == "__main__":

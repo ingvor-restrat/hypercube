@@ -1,22 +1,58 @@
-\documentclass{strategynet-report}
+\documentclass[11pt]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{mathpazo}
+\usepackage[scaled]{helvet}
+\usepackage{microtype}
+\usepackage[letterpaper,margin=0.88in]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{listings}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning}
+\usepackage{xurl}
+\usepackage{hyperref}
 
 \hypersetup{
-  pdftitle={Slice + Hypercube II: Circuits and Replay},
-  pdfauthor={research@strategynet.ai}
+  pdftitle={Hypercube: Callbacks, Triggers, and Replay},
+  pdfauthor={research@strategynet.ai},
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  citecolor=blue!50!black,
+  urlcolor=blue!60!black
 }
 
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.52em}
+
 \lstdefinestyle{circuit}{
-  style=sncode
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{black!3},
+  frame=single,
+  rulecolor=\color{black!20},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  aboveskip=0.8em,
+  belowskip=0.8em
 }
 
 \newcommand{\SLICE}{\textsf{Slice}}
-\newcommand{\CIRCUIT}{\textsf{Circuit}}
-\newcommand{\R}{\mathbb{R}}
+\newcolumntype{P}[1]{>{\raggedright\arraybackslash}p{#1}}
 
 \tikzset{
   circuitbox/.style={
-    draw=SNInk,
-    fill=SNInk!5,
+    draw=black!70,
+    fill=black!3,
     rounded corners=2pt,
     align=center,
     minimum height=9mm,
@@ -25,96 +61,62 @@
   },
   circuithot/.style={
     circuitbox,
-    draw=SNSignalDark,
-    fill=SNSignal!7
+    draw=blue!55!black,
+    fill=blue!5
   },
   circuitmeta/.style={
     circuitbox,
-    draw=SNMuted,
-    fill=SNMuted!7
+    draw=black!50,
+    fill=black!4
   },
   circuitstate/.style={
     circuitbox,
-    draw=SNViolet,
-    fill=SNViolet!7
+    draw=blue!65!black,
+    fill=blue!8
   },
   circuiteffect/.style={
     circuitbox,
-    draw=SNDanger,
-    fill=SNDanger!6
+    draw=red!55!black,
+    fill=red!4
   },
   circuitflow/.style={
     -{Latex[length=2mm]},
-    draw=SNInk,
+    draw=black!80,
     line width=0.75pt
   },
   circuitrecord/.style={
     -{Latex[length=2mm]},
-    draw=SNSignalDark,
+    draw=blue!55!black,
     dashed,
     line width=0.75pt
   },
   circuitblocked/.style={
     -{Latex[length=2mm]},
-    draw=SNMuted,
+    draw=black!55,
     dotted,
     line width=0.75pt
   }
 }
 
-\title{\SLICE{} + Hypercube II}
-\SNSubtitle{Stateful factor circuits, explicit backpressure, and deterministic replay}
-\author{\href{mailto:research@strategynet.ai}{research@strategynet.ai}}
-\SNDocumentType{Part II: implementation and evidence}
-\SNVersion{Version 0.1}
-\SNDate{July 2026}
-\SNStatus{Open-source working paper}
-\SNShortTitle{Hypercube II: Circuits and Replay}
+\title{Hypercube: Callbacks, Triggers, and Replay}
+\author{research@strategynet.ai}
+\date{July 2026}
 
 \begin{document}
 \maketitle
 
-\begin{abstract}
-The first \SLICE{} + Hypercube paper established a live state plane and a pure,
-generation-oriented calculation graph.  It deliberately left stateful
-function cells, durable replay, transport, and effects as future boundaries.
-This companion paper implements a first stateful callback boundary and a
-deterministic recording/replay path.
+\begin{abstract}Hypercube calculates factors and scores for a changing set of instruments. This paper adds callbacks that run after each completed generation. A callback can calculate spreads between factor outputs, wait for a threshold to hold across several updates, use a separate exit threshold, and invalidate a signal when an input disappears. It returns current state and entry, exit, or invalidation events for use by monitors, alerts, and strategy services. A bounded Disruptor ring preserves order and reports \texttt{RingFull} when callbacks cannot keep up. The same run can be written to JSON Lines and replayed through a fresh engine to check the calculations and callback state. The demo replays 40 generations, 6,400 factor cells, 1,280 trigger-state cells, and 78 transitions without a mismatch. Aeron, raw-feed replay, checkpoints, benchmarks, and execution are not yet included.\end{abstract}
 
-\texttt{hypercube-circuit} accepts one coherent Hypercube snapshot at a time,
-orders it through a single-producer Disruptor ring, and invokes deterministic
-stateful processors using generation time rather than processor wall time.
-The reference processor turns a calculated cross-section into persistent
-threshold state with hysteresis and missing-data invalidation.  Every
-generation emits both a complete state cross-section for late subscribers and
-sparse transition events for synchronized consumers.
+\section{Using Hypercube Across Updates}
 
-The same path records a versioned manifest, complete Hypercube updates,
-optional upstream stream positions, semantic snapshot digests, state, and
-transitions.  Replay constructs a fresh engine and fresh processor state,
-changes only the execution mode, and compares every generation.  A checked-in
-demonstration records 40 generations over 32 entities, recalculates 6,400
-factor cells, reconstructs 1,280 trigger-state cells and 78 transitions, and
-reports zero divergent generations.  The ETF, pairs, browser, and replay
-programs provide an executable application ladder.  The paper does not claim
-a production Aeron adapter, raw-feed reconstruction, checkpoint seeking,
-latency benchmark, or trading authority; it specifies those boundaries
-explicitly.
-\end{abstract}
+\subsection{Why the circuit exists}
 
-\SNtableofcontents
-
-\part{From Factors to Temporal State}
-
-\section{Continuation from Part I}
-
-Part I separated three responsibilities \cite{partone}: \SLICE{} publishes
-typed current vectors, Hypercube evaluates a coherent generation through a
-declared graph, and external adapters move or act on the resulting state.
-That release could calculate a factor, rank, basket discrepancy, or
-cointegrating residual.  It could not remember that a condition had persisted
-for three generations, distinguish an entry from an already-active signal, or
-reconstruct that temporal state from a recording.
+Hypercube publishes its memory-mapped output as \SLICE{} files.  It already
+calculates fields, factors, ranks, basket discrepancies, and residuals for one
+complete generation \cite{partone}.  It does not retain application state
+between generations.  It therefore cannot remember that a condition has held
+for three updates, distinguish a new entry from an active signal, or rebuild
+that state from a recording.
 
 Those omissions become visible in an ordinary factor application.  Let
 \(f_{i,g}\) and \(h_{i,g}\) be two calculated factors for entity \(i\) at
@@ -128,68 +130,57 @@ every update for which \(d_{i,g}>a\).  It usually wants a lifecycle:
   \text{inactive}\rightarrow\text{qualifying}\rightarrow
   \text{active}\rightarrow\text{exited or invalidated}.
 \]
-That lifecycle is state across generations, not another cross-sectional
-normalization within one generation.
+That lifecycle requires state across generations.  The circuit runs after
+Hypercube completes a generation, retains the qualifying count and active
+state for each entity, and reports only genuine state changes.
 
-\begin{SNthesis}
-The useful product is not merely a stream of factor values.  It is a
-reconstructible state transition system whose inputs, logical clock, current
-state, sparse changes, overload behavior, and effect boundary are all explicit.
-\end{SNthesis}
+\subsection{Programs in the repository}
 
-\section{Application ladder}
-
-The public repository now contains four complementary demonstrations
-\cite{repository}:
+The repository contains four runnable examples \cite{repository}:
 \begin{center}
-\begin{tabularx}{\textwidth}{@{}p{0.18\textwidth}p{0.26\textwidth}X@{}}
+\small
+\begin{tabularx}{\textwidth}{@{}P{0.20\textwidth}P{0.32\textwidth}X@{}}
 \toprule
-Demonstration & Implemented operation & Architectural evidence \\
+Program & Calculation & Output \\
 \midrule
 browser server &
-factor graph over a changing stock cross-section; \SLICE{}, JSON, and SSE
-publication &
-one calculation can support local memory and remote presentation views \\
+stock factor graph over a changing cross-section &
+\SLICE{} files, a JSON snapshot, and an SSE dashboard \\
 ETF monitor &
-constituent-axis basket reduction followed by ETF-axis ranking &
-domain arithmetic and cross-sectional algebra remain separate, visible stages \\
+constituent returns, basket fair values, premiums, and ranks &
+ETF-aligned fair value and premium vectors \\
 pairs monitor &
-cointegrating residual, model standardization, half-life, and opportunity rank &
-model values remain aligned to stable pair entities across generations \\
+cointegrating residuals, standardized scores, half-life, and rank &
+pair-aligned residual and opportunity vectors \\
 record/replay &
-factor calculation, persistent trigger state, versioned recording, and fresh
-reconstruction &
-the temporal layer can be verified without invoking a live effect \\
+factor calculation plus a persistent threshold callback &
+a JSON Lines recording, current trigger state, transitions, and a verification report \\
 \bottomrule
 \end{tabularx}
 \end{center}
 
-The demonstrations are deliberately not collapsed into one large application.
-ETF and pairs make the upstream calculations readable.  The browser makes
-publication visible.  The circuit demonstration isolates temporal state and
-replay.  Their shared contract is a coherent Hypercube generation.
+The ETF and pairs programs show the calculations.  The browser shows current
+output.  The replay program adds the stateful callback and recording used in
+this paper.  They run separately but use the same Hypercube update and
+snapshot types.
 
-\section{Three different kinds of truth}
+\subsection{Keep state, recordings, and effects separate}
 
-The architecture distinguishes:
+The implementation keeps three outputs separate:
 \begin{enumerate}
-  \item \textbf{current analytical truth}: the latest coherent values and
-        callback state a consumer may read;
-  \item \textbf{historical reconstruction truth}: the ordered inputs and
-        metadata required to rebuild those values and state;
-  \item \textbf{effect authority}: the separate capability to publish,
-        persist, alert, or trade.
+  \item \textbf{current state}: the latest factor values and callback state;
+  \item \textbf{recording}: the ordered updates needed to rebuild that state;
+  \item \textbf{effects}: alerts, database writes, or orders sent by a
+        separately authorized adapter.
 \end{enumerate}
 
-A ring buffer is not durable history.  A memory-mapped vector is not an event
-log.  A replayable decision is not permission to execute it.  Keeping these
-distinctions structural avoids two common errors: treating a fast queue as the
-system of record, and allowing deterministic calculation code to inherit
-irreversible authority.
+A Disruptor ring only hands work to a callback.  A \SLICE{} file only exposes
+the latest value.  Neither is a recording.  Replay recalculates state but must
+not resend alerts or orders.
 
-\part{Circuit Contract}
+\section{Processing Each Hypercube Update}
 
-\section{One coherent generation is one event}
+\subsection{Process a complete generation}
 
 For generation \(g\), the pure engine receives
 \[
@@ -204,12 +195,13 @@ node graph, \(V_g\) is the ordered calculated value set, and \(Q_g\) is node
 status.  The circuit does not subscribe to individual cell writes.  Its event
 is the immutable \(H_g\), after the engine has accepted the complete update.
 
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centering
+\resizebox{\linewidth}{!}{%
 \begin{tikzpicture}[node distance=7mm and 7mm]
   \node[circuitmeta] (input) {\textbf{Update \(U_g\)}\\rows, graph, logical time};
   \node[circuithot, right=of input] (engine)
-    {\textbf{Hypercube}\\pure generation calculation};
+    {\textbf{Hypercube}\\calculate full generation};
   \node[circuithot, right=of engine] (snapshot)
     {\textbf{Snapshot \(H_g\)}\\coherent cross-section};
   \node[circuitstate, right=of snapshot] (ring)
@@ -227,9 +219,10 @@ is the immutable \(H_g\), after the engine has accepted the complete update.
     {\textbf{Recording}\\input + expected output};
   \draw[circuitrecord] (input) -- (record);
   \draw[circuitrecord] (outputs) -- (record);
-\end{tikzpicture}
-\caption{Implemented calculation, circuit, and recording boundary.  A callback
-never observes a half-built Hypercube generation.}
+\end{tikzpicture}%
+}
+\caption{Hypercube finishes a generation before the callback receives it.
+The input and callback output are written to the recording.}
 \label{fig:circuit-path}
 \end{figure}
 
@@ -242,7 +235,7 @@ as logical coordinates.  Processor scheduling time, operating-system time,
 and measured calculation duration are operational observations, not inputs to
 the state transition function.
 
-\section{Why a Disruptor is useful here}
+\subsection{Ordered callback execution with Disruptor}
 
 The LMAX Disruptor separates event storage, sequencing, producer claims,
 consumer progress, and dependency graphs around a preallocated bounded ring
@@ -271,7 +264,7 @@ the next nonblocking publication is rejected.  That failure is valuable
 information: the consumer cannot keep up and latency would otherwise grow
 behind the producer.
 
-\section{Backpressure is an application policy}
+\subsection{When the callback falls behind}
 
 The circuit never silently overwrites an unprocessed correctness-lane
 generation.  On a full ring, an owner must choose one of three policies:
@@ -287,13 +280,10 @@ recording step complete.  Where an upstream market feed cannot be slowed, the
 feed should be archived before generation assembly.  The circuit is then a
 deterministic consumer of durable input, not the sole owner of history.
 
-\begin{SNnote}[What the ring solves]
-The ring makes ordering, capacity, and consumer progress visible inside one
-process.  It does not solve raw-feed durability, cross-host recovery,
-multi-stream generation assembly, or external-effect idempotency.
-\end{SNnote}
+The ring does not provide raw-feed storage, cross-host recovery, multi-stream
+generation assembly, or duplicate protection for external effects.
 
-\section{Processor determinism}
+\subsection{Requirements for repeatable callbacks}
 
 A processor is a state transition function
 \[
@@ -317,7 +307,7 @@ Lamport clock, but it applies the relevant separation: generation and circuit
 sequence determine processing order, while observation time describes the
 input.
 
-\section{Reference threshold state machine}
+\subsection{Persistent threshold callback}
 
 The first processor watches one calculated node for every entity.  A trigger
 specification is
@@ -345,7 +335,7 @@ If the watched node has no value for an active entity, the state is
 is missing, its count is removed, so a later value cannot falsely complete a
 ``consecutive'' run across a gap.
 
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centering
 \begin{tikzpicture}[node distance=13mm and 18mm]
   \node[circuitmeta] (inactive) {\textbf{Inactive}\\\(k=0\)};
@@ -373,7 +363,7 @@ missing-data invalidation.}
 \label{fig:trigger-state}
 \end{figure}
 
-\section{Dense state and sparse transitions}
+\subsection{Publish current state and transitions}
 
 For every generation, the processor emits:
 \[
@@ -392,14 +382,14 @@ replaying the entire run.  \(\Delta Z_g\) is the sparse edge stream for a
 subscriber that already holds \(Z_{g-1}\).  Recording both views also exposes
 latent state divergence even when no transition happens in a generation.
 
-This dual output is the bridge from an Excel-like continuously recalculated
-factor sheet to an application state machine.  Factor values remain
-inspectable, signal lifecycle becomes explicit, and downstream consumers can
-choose snapshot or event semantics without recalculating either.
+An application can write \(Z_g\) to a \SLICE{} vector so a new subscriber can
+read current state immediately.  Existing subscribers can consume
+\(\Delta Z_g\) to receive only entries, exits, and invalidations.  Neither
+consumer needs to rerun the factor calculation or the threshold callback.
 
-\part{Deterministic Record and Replay}
+\section{Recording and Replay}
 
-\section{Choosing the replay boundary}
+\subsection{What to record}
 
 ``Replay the system'' is incomplete until the recorded boundary is named.
 \begin{center}
@@ -415,7 +405,7 @@ factor graph, values, callback state, and transitions &
 implemented compromise; repeats rows and graph per generation \\
 normalized raw events plus generation seals &
 ingestion, generation assembly, factors, and callbacks &
-strongest apparatus replay; requires ordering, watermark, and join contracts \\
+rebuilds the most; requires ordering, watermark, and join rules \\
 \bottomrule
 \end{tabularx}
 \end{center}
@@ -425,7 +415,7 @@ useful than factor-only replay because changes to rows, node graphs, transforms,
 or arithmetic can be detected.  It stops short of claiming that vendor
 normalization and multi-feed generation assembly are reproducible.
 
-\section{Versioned recording}
+\subsection{Recording format}
 
 A recording is
 \[
@@ -461,7 +451,7 @@ as \texttt{null}; a missing primitive is represented by omitting its field.
 The format is intentionally inspectable and not presented as the final
 low-latency wire encoding.
 
-\section{Semantic exactness}
+\subsection{What replay compares}
 
 The semantic snapshot digest includes:
 \begin{itemize}
@@ -486,14 +476,10 @@ identities remain provenance: a different compiler, target, or implementation
 may be replayed, but any arithmetic difference is reported rather than
 normalized away.
 
-\begin{SNnote}[Exact does not mean identical runtime]
-Replay requires semantic equality of calculated values and state transitions.
-It does not require identical processor scheduling, compute duration, or
-transport timing.  Including those operational measurements would make a
-correct replay fail for irrelevant reasons.
-\end{SNnote}
+Replay compares calculated values and state transitions.  It does not compare
+processor scheduling, compute duration, or transport timing.
 
-\section{Replay algorithm}
+\subsection{Replay procedure}
 
 Replay performs the following bounded procedure:
 \begin{enumerate}
@@ -527,7 +513,7 @@ logical ordering from incidental runtime scheduling \cite{detreplay}.  The
 Hypercube implementation is narrower: it records already coherent
 application updates and executes one ordered stateful lane.
 
-\section{Divergence is a result, not an exception}
+\subsection{Mismatch reporting and exit codes}
 
 Malformed files, invalid updates, and processor failures are operational
 errors.  A valid recording that produces a different digest, state, or
@@ -552,26 +538,23 @@ This distinction supports two workflows:
         or model and analyze the resulting divergence.
 \end{itemize}
 
-\section{Effects remain outside replay}
+\subsection{Disable external effects during replay}
 
-Event-sourced systems must prevent replayed events from reissuing external
-updates to systems that cannot distinguish replay from live processing
-\cite{eventsourcing}.  Hypercube enforces the simpler precursor:
-the MVP contains no execution adapter, and processors are documented as
-deterministic calculation code without irreversible effects.
+Replay data must not reach an adapter that can send an order, notification,
+or database write as though the data were live.  The current implementation
+contains no execution adapter, and callbacks perform calculations only.
 
 Future replay publication should use a namespace such as
 \[
   \texttt{replay/\{run\_id\}/\ldots}
 \]
-and every authorized effect adapter must reject replay-mode inputs.  A live
-order, notification, or database mutation should also carry an idempotency key
-and an evidence reference.  Calculation replay and effect replay are separate
-capabilities.
+and every effect adapter must reject replay-mode inputs.  A live order,
+notification, or database mutation should also carry an idempotency key and a
+reference to the generation that produced it.
 
-\part{Transport and Deployment}
+\section{Deployment}
 
-\section{Local circuit versus Aeron}
+\subsection{Use Aeron at a process boundary}
 
 Inside one compute process, Aeron is unnecessary for the engine-to-callback
 handoff.  The immutable snapshot is already in memory; the Disruptor provides
@@ -594,7 +577,7 @@ hypercube.recording.manifest.v1
 hypercube.recording.generation.v1
 \end{lstlisting}
 
-\section{Source positions define the input frontier}
+\subsection{Record upstream stream positions}
 
 For \(k\) upstream streams, generation \(g\) may record
 \[
@@ -604,9 +587,8 @@ where \(p_{j,g}\) is the last input position included from stream \(j\).
 The manifest can carry Archive recording identities and start positions;
 \texttt{source\_positions} carries the per-generation frontier.
 
-This vector makes a generation's input cut inspectable, but it does not by
-itself prove that the cut is semantically coherent.  The application must
-still define:
+These positions show which upstream messages were included in a generation.
+The feed adapter must still define:
 \begin{itemize}
   \item the canonical order when inputs from different streams race;
   \item event-time and ingestion-time watermark rules;
@@ -614,12 +596,12 @@ still define:
   \item the generation seal that says no more input belongs to \(g\).
 \end{itemize}
 
-Those rules are the remaining step from complete-update replay to raw-feed
-apparatus replay.
+Without those rules, Hypercube can replay complete updates but cannot rebuild
+them from raw feeds.
 
-\section{Deployment patterns}
+\subsection{Deployment options}
 
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centering
 \resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[node distance=7mm and 9mm]
@@ -650,14 +632,14 @@ separately authorized effects (dotted).}
 \label{fig:deployment}
 \end{figure}
 
-The topology supports a \textbf{single process}; a \textbf{split deployment}
-that keeps engine-to-circuit transfer local but publishes views over Aeron; or
-\textbf{durable reconstruction} that archives normalized input and publishes
-replay through an isolated namespace.
+All components can run in one process.  A split service can keep Hypercube and
+the callback together while publishing state over Aeron.  A deployment that
+must rebuild from raw input can archive normalized messages before generation
+assembly and publish replay on a separate channel.
 
-\part{Executable Demonstrations}
+\section{Examples}
 
-\section{ETF: two axes remain visible}
+\subsection{ETF basket premiums}
 
 The ETF monitor reduces 160 correlated constituent returns into 12 basket fair
 values and then evaluates five ETF-aligned Hypercube nodes.  For ETF \(j\),
@@ -673,22 +655,21 @@ The graph publishes fair value, market price, premium basis points, model
 z-score, and cross-sectional premium rank.  The terminal therefore displays
 60 cells per generation.
 
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centering
-\includegraphics[width=\textwidth]{etf-demo.png}
+\includegraphics[width=0.96\linewidth]{assets/etf-demo.png}
 \caption{Checked-in ETF recording at generation 28.  Labels preserve the
 premium sign independently of color.  Fees, borrow, and creation-unit
 frictions remain explicit omissions.}
 \label{fig:etf-demo}
 \end{figure}
 
-This is an upstream circuit application: a callback may watch
-\texttt{premium\_z}, require persistence, and publish entry/exit state without
-changing the basket calculation.  A more complete application would combine
-factor state with inventory, executable spread, creation size, and policy
-before producing a bounded intent.
+A callback can watch \texttt{premium\_z}, require it to remain above a
+threshold for several generations, and publish an entry or exit without
+changing the basket calculation.  A trading component would still need
+inventory, quoted spread, creation-unit size, costs, and execution limits.
 
-\section{Pairs: model residual becomes signal state}
+\subsection{Pairs residuals and triggers}
 
 The pairs monitor publishes 120 cells over 24 stable pair entities.  Its
 residual and standardization are
@@ -699,39 +680,37 @@ residual and standardization are
 \]
 Half-life and cross-sectional opportunity rank remain separate nodes.
 
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centering
-\includegraphics[width=\textwidth]{pairs-demo.png}
+\includegraphics[width=0.96\linewidth]{assets/pairs-demo.png}
 \caption{Checked-in pairs recording at generation 28.  The display ranks
 standardized dislocations while retaining hedge ratio and half-life context.}
 \label{fig:pairs-demo}
 \end{figure}
 
-A threshold processor turns a repeated \(z\)-score condition into lifecycle
-state.  Hysteresis avoids an exit/re-entry loop near the entry boundary;
-invalidation distinguishes a missing leg or suppressed residual from a
-genuine convergence exit.  Estimation windows, structural-break detection,
-borrow, cost, and portfolio coupling remain outside the demo.
+The threshold callback can enter only after the \(z\)-score remains large for
+several generations and exit at a lower threshold.  If either leg disappears,
+it reports invalidation rather than convergence.  Estimation windows,
+structural-break detection, borrow, costs, and portfolio limits remain outside
+the demo.
 
-\section{Browser: one generation, several views}
+\subsection{Browser and \SLICE{} output}
 
 The synthetic server computes five nodes for a changing stock cross-section,
 publishes them to entity-aligned \SLICE{} files, exposes a JSON snapshot, and
-streams generations through SSE to a dependency-free dashboard.  It
-demonstrates that current-state projection and subscriber presentation need
-not rerun factor arithmetic.
+streams generations through SSE to a dependency-free dashboard.
 
-The circuit extends that fan-out with two additional views:
+The callback adds two outputs:
 \begin{itemize}
   \item a dense current-state projection suitable for \SLICE{} or a bootstrap
         response;
   \item a sparse transition stream suitable for already synchronized
         subscribers.
 \end{itemize}
-Neither browser SSE nor \SLICE{} is the replay log.  They are projections of a
-generation whose reproducible input lives at the recording boundary.
+The browser stream and \SLICE{} files contain current output, not replay
+history.  The JSON Lines recording contains the updates needed for replay.
 
-\section{Record/replay experiment}
+\subsection{Replay demo}
 
 The executable experiment is:
 \begin{lstlisting}[style=circuit]
@@ -768,8 +747,12 @@ divergent generations & \multicolumn{2}{r}{0} \\
 
 The file contains 41 lines: one manifest and 40 generation records.  This is a
 functional exactness result, not a throughput or storage benchmark.
+The repository also includes an animated
+\href{https://github.com/ingvor-restrat/hypercube/blob/main/docs/markup/circuit-replay.gif}
+{Hypercube terminal demo} that shows qualifying state, entries, exits,
+missing-data invalidation, and the final replay comparison.
 
-\section{Failure contracts exercised by tests}
+\subsection{Failure cases covered by tests}
 
 The circuit tests do more than assert the happy path:
 \begin{itemize}
@@ -784,11 +767,10 @@ The circuit tests do more than assert the happy path:
   \item unchanged input reconstructs snapshot, state, and transitions.
 \end{itemize}
 
-These tests target the places where a superficially working event system can
-quietly drift: overload, gaps, missing observations, serialization, hidden
-state, and nondeterministic comparison.
+The tests cover overload, sequence gaps, missing observations, serialization,
+state reset, and output comparison.
 
-\section{Current conformance result}
+\subsection{Test results}
 
 The workspace currently runs 29 tests:
 \begin{center}
@@ -810,33 +792,33 @@ The workspace also passes formatting, clippy with warnings denied, and public
 API documentation with warnings denied.  These are conformance and packaging
 checks; the repository still makes no latency or throughput claim.
 
-\part{Application and Research Sequence}
+\section{Practical Use and Next Steps}
 
-\section{The business application}
+\subsection{Factor-to-signal service}
 
-The immediate application is a factor-to-signal state service:
+A live service can run the components in this order:
 \begin{enumerate}
-  \item Hypercube calculates raw fields, factor spreads, ranks, residuals, and
-        scores over the full current universe;
-  \item the circuit applies persistence, hysteresis, invalidation, and later
-        stateful model callbacks;
-  \item dense state is published for current consumers;
-  \item sparse transitions feed alerts, strategy coordinators, portfolio
-        construction, or a separately governed trading adapter;
-  \item the recording reconstructs why a state existed and when it changed.
+  \item a feed adapter assembles one complete Hypercube update;
+  \item Hypercube calculates fields, spreads, ranks, residuals, and scores;
+  \item the circuit runs its callbacks on the completed snapshot;
+  \item the caller writes current callback state to \SLICE{} or an API and
+        sends transitions to alerting or strategy consumers;
+  \item the capture session records the update and callback output for replay.
 \end{enumerate}
 
-The commercial value is less about inventing another formula and more about
-making calculated state reusable.  A factor team owns one factor definition;
-multiple applications can consume the same current vector and transition
-history.  A strategy can be tested against the exact inputs that drove the
-live system.  An operator can distinguish ``no longer qualifies'' from
-``source disappeared.''  A new subscriber can bootstrap from dense state
-instead of inferring it from an incomplete recent event window.
+For example, suppose an ETF premium \(z\)-score must be at least \(1.5\) for
+three consecutive generations and exits at \(0.5\).  Hypercube calculates the
+\(z\)-score.  The callback increments a per-ETF count, emits
+\texttt{Entered} on the third qualifying generation, keeps the state active
+while the value remains above \(0.5\), and emits \texttt{Invalidated} if the
+ETF value disappears.  A new consumer reads the complete current state;
+an existing consumer can process only the transition events.  The recording
+lets an operator rerun the same generations when the factor code or trigger
+code changes.
 
-\section{Counterfactual replay}
+\subsection{Test rule changes against recorded data}
 
-Once reconstruction is exact, replay can branch:
+After an exact replay passes, another run can intentionally:
 \begin{itemize}
   \item change entry, exit, or persistence parameters;
   \item replace one factor node or model version;
@@ -845,16 +827,14 @@ Once reconstruction is exact, replay can branch:
   \item measure proposed decision intents without enabling live effects.
 \end{itemize}
 
-This resembles the ``parallel model'' enabled by event sourcing: alternative
-state can be produced from an alternative event or processing history
-\cite{eventsourcing}.  The current CLI verifies only the recorded
-configuration.  A counterfactual runner and comparative report are a natural
-next layer.
+The current CLI verifies only the configuration stored in the recording.  A
+counterfactual command would accept a different graph or trigger
+configuration, mark the run as non-exact, and report the first generation
+whose values or transitions changed.
 
-\section{Implemented limits}
+\subsection{Current limits}
 
-The current release establishes a vertical circuit, not a complete event
-platform:
+The current code covers one complete calculation-and-replay path:
 \begin{itemize}
   \item JSON Lines is the only recording adapter; Aeron Archive and SBE mapping
         are specified but not implemented;
@@ -873,60 +853,45 @@ platform:
   \item no external-effect or trading authority exists in the circuit crate.
 \end{itemize}
 
-These limits are intentional.  They keep a replay verification command from
-being confused with a production recovery plan or a calculated signal from
-being confused with an executable order.
+The \texttt{verify} command is therefore a calculation check, not a production
+recovery tool.  Trigger state is data, not an executable order.
 
-\section{Next implementation sequence}
+\subsection{Next steps}
 
-A bounded continuation is:
+The next implementation work is:
 \begin{enumerate}
-  \item add an SBE codec for manifest and generation envelopes;
-  \item record and replay those envelopes through Aeron Archive by identity and
-        position;
-  \item define canonical multi-stream generation seals and late-event policy;
-  \item add periodic processor checkpoints with digest-verified seek;
-  \item publish trigger state into \SLICE{} and transitions onto a named
+  \item publish trigger state to \SLICE{} and transitions onto a named
         subscriber channel;
-  \item add counterfactual configuration and first-divergence comparison;
-  \item benchmark declared topologies with percentile latency, backlog, CPU,
-        allocation, and recovery-time measurements;
-  \item specify an idempotent simulated effect adapter before any live
-        execution integration.
+  \item add an SBE codec and record the envelopes through Aeron Archive;
+  \item define multi-stream generation seals and late-event handling;
+  \item add processor checkpoints and verified seek;
+  \item add counterfactual configuration and first-mismatch comparison;
+  \item benchmark latency, backlog, CPU, allocation, and recovery time for each
+        supported deployment;
+  \item add an idempotent simulated effect adapter before considering live
+        execution.
 \end{enumerate}
 
-\section{Conclusion}
+\subsection{Conclusion}
 
-Part I made current analytical values cheap to share and deterministic to
-recalculate within one generation.  Part II adds the missing temporal
-boundary.  A coherent snapshot becomes one ordered circuit event; a declared
-processor turns it into reconstructible state; a bounded ring exposes overload
-instead of hiding it; and a versioned recording proves whether a fresh engine
-and processor arrive at the same result.
+Hypercube can now calculate a complete generation, pass it to an ordered
+stateful callback, return current state and transitions, record the input and
+output, and verify the result with a fresh process.  The included threshold
+callback handles persistence, separate entry and exit levels, and missing
+inputs.
 
-The architecture now supports a useful end-to-end statement:
-\[
-  \text{input generation}
-  \longrightarrow\text{factor state}
-  \longrightarrow\text{signal state}
-  \longrightarrow\text{recorded evidence}.
-\]
-ETF and pairs show readable financial calculations, the browser shows
-multi-view publication, and the replay demo verifies the stateful layer.
-Aeron, raw-feed reconstruction, checkpoints, benchmarks, and effects remain
-separate work, but their contracts are now narrower and testable.
-
-The central design choice is restraint.  The Disruptor moves coherent state;
-it is not truth.  The recording reconstructs calculation; it is not authority.
-The callback emits a decision state; it is not an effect.  Those distinctions
-allow the system to become faster and more composable without making its
-behavior less explainable.
+The immediate use is a factor-to-signal service for monitors, alerts, and
+strategy inputs.  ETF and pairs provide calculation examples, the browser
+provides current output, and the replay demo checks 40 recorded generations.
+Publishing callback state to \SLICE{} is the next practical addition.  Aeron
+transport, raw-feed reconstruction, checkpoints, benchmarks, and execution
+remain future work.
 
 \begin{thebibliography}{9}
 
 \bibitem{partone}
 StrategyNet,
-\emph{\SLICE{} + Hypercube: Current analytical state without rebuilding it
+\emph{Hypercube: Current analytical state without rebuilding it
 for every reader},
 Open-source working paper, version 0.2, July 2026,
 \url{https://github.com/ingvor-restrat/hypercube/blob/main/docs/latex/hypercube_foundations.pdf}.
@@ -949,12 +914,6 @@ L. Lamport,
 \emph{Time, Clocks, and the Ordering of Events in a Distributed System},
 Communications of the ACM, 21(7), pp.~558--565, 1978,
 \url{https://www.microsoft.com/en-us/research/publication/time-clocks-ordering-events-distributed-system/}.
-
-\bibitem{eventsourcing}
-M. Fowler,
-\emph{Event Sourcing},
-Further Enterprise Application Architecture, 2005,
-\url{https://martinfowler.com/eaaDev/EventSourcing.html}.
 
 \bibitem{detreplay}
 R. Strom, C. Dorai, T. H. Feng, and Z. Wei,

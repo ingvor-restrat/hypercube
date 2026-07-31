@@ -15,6 +15,12 @@ useful for tests, examples, and inspection; an Aeron Archive adapter can map
 one manifest and one generation record to application messages without
 changing replay semantics.
 
+Run the animated terminal example:
+
+```bash
+cargo run -p hypercube-circuit --example circuit
+```
+
 See the repository
 [replay guide](https://github.com/ingvor-restrat/hypercube/blob/main/docs/replay.md)
 for the complete contract and runnable example.
