@@ -98,14 +98,25 @@
   }
 }
 
-\title{Hypercube: Callbacks, Triggers, and Replay}
+\title{Hypercube Circuits: Merging cross-section factor calculations with stateful triggers and replay}
 \author{research@strategynet.ai}
 \date{July 2026}
 
 \begin{document}
 \maketitle
 
-\begin{abstract}Hypercube calculates factors and scores for a changing set of instruments. This paper adds callbacks that run after each completed generation. A callback can calculate spreads between factor outputs, wait for a threshold to hold across several updates, use a separate exit threshold, and invalidate a signal when an input disappears. It returns current state and entry, exit, or invalidation events for use by monitors, alerts, and strategy services. A bounded Disruptor ring preserves order and reports \texttt{RingFull} when callbacks cannot keep up. The same run can be written to JSON Lines and replayed through a fresh engine to check the calculations and callback state. The demo replays 40 generations, 6,400 factor cells, 1,280 trigger-state cells, and 78 transitions without a mismatch. Aeron, raw-feed replay, checkpoints, benchmarks, and execution are not yet included.\end{abstract}
+\begin{abstract}Hypercube calculates factors and scores for a changing set of 
+  instruments. This paper adds callbacks that run after each completed generation. 
+  A callback can calculate spreads between factor outputs, wait for a threshold 
+  to hold across several updates, use a separate exit threshold, and invalidate 
+  a signal when an input disappears. It returns current state and entry, 
+  exit, or invalidation events for use by monitors, alerts, and strategy services. 
+  A bounded Disruptor ring preserves order and reports \texttt{RingFull} 
+  when callbacks cannot keep up. The same run can be written to JSON Lines and 
+  replayed through a fresh engine to check the calculations and callback state. 
+  The demo replays 40 generations, 6,400 factor cells, 1,280 trigger-state cells, 
+  and 78 transitions without a mismatch. Aeron, raw-feed replay, checkpoints, 
+  benchmarks, and execution are not yet included.\end{abstract}
 
 \section{Using Hypercube Across Updates}
 

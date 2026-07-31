@@ -1,22 +1,60 @@
-\documentclass{strategynet-report}
+\documentclass[11pt]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{mathpazo}
+\usepackage[scaled]{helvet}
+\usepackage{microtype}
+\usepackage[letterpaper,margin=0.88in]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{listings}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning}
+\usepackage{xurl}
+\usepackage{hyperref}
 
 \hypersetup{
-  pdftitle={Slice + Hypercube},
-  pdfauthor={research@strategynet.ai}
+  pdftitle={Hypercube Core: Memory-mapped real time factors},
+  pdfauthor={research@strategynet.ai},
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  citecolor=blue!50!black,
+  urlcolor=blue!60!black
 }
 
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.52em}
+
 \lstdefinestyle{slice}{
-  style=sncode
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{black!3},
+  frame=single,
+  rulecolor=\color{black!20},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  aboveskip=0.8em,
+  belowskip=0.8em
 }
 
 \newcommand{\SLICE}{\textsf{Slice}}
 \newcommand{\R}{\mathbb{R}}
 \newcommand{\E}{\mathbb{E}}
+\newcolumntype{P}[1]{>{\raggedright\arraybackslash}p{#1}}
 
 \tikzset{
   slicebox/.style={
-    draw=SNInk,
-    fill=SNInk!5,
+    draw=black!70,
+    fill=black!3,
     rounded corners=2pt,
     align=center,
     minimum height=9mm,
@@ -25,40 +63,35 @@
   },
   slicehot/.style={
     slicebox,
-    draw=SNSignalDark,
-    fill=SNSignal!7
+    draw=blue!55!black,
+    fill=blue!5
   },
   slicemeta/.style={
     slicebox,
-    draw=SNMuted,
-    fill=SNMuted!7
+    draw=black!50,
+    fill=black!4
   },
   sliceaction/.style={
     slicebox,
-    draw=SNViolet,
-    fill=SNViolet!7
+    draw=blue!65!black,
+    fill=blue!8
   },
   sliceflow/.style={
     -{Latex[length=2mm]},
-    draw=SNInk,
+    draw=black!80,
     line width=0.75pt
   },
   slicefuture/.style={
     -{Latex[length=2mm]},
-    draw=SNSignalDark,
+    draw=blue!55!black,
     dashed,
     line width=0.75pt
   }
 }
 
-\title{\SLICE{} + Hypercube}
-\SNSubtitle{Current analytical state without rebuilding it for every reader}
-\author{\href{mailto:research@strategynet.ai}{research@strategynet.ai}}
-\SNDocumentType{Foundations and architecture}
-\SNVersion{Version 0.2}
-\SNDate{July 2026}
-\SNStatus{Open-source working paper}
-\SNShortTitle{Slice + Hypercube}
+\title{Hypercube: Core memory-mapped real time factors}
+\author{research@strategynet.ai}
+\date{July 2026}
 
 \begin{document}
 \maketitle
@@ -69,7 +102,6 @@ change.  The arithmetic is usually cheap.  Repeatedly finding, joining,
 serializing, and copying the same current inputs is not.  When every reader
 rebuilds that state for itself, a simple vector calculation inherits database
 latency, extra allocation, and inconsistent observation boundaries.
-
 \SLICE{} gives local processes a typed, memory-mapped view of current,
 entity-aligned values.  Hypercube evaluates one coherent input generation
 through a declared node graph and produces cross-sectional outputs that can be
@@ -82,8 +114,6 @@ cells, replication, GPU lowering, and trading actions remain outside the
 current release.  Although the examples use markets, the API also works for
 any stable set of entities.
 \end{abstract}
-
-\SNtableofcontents
 
 \part{Motivation}
 
@@ -111,11 +141,12 @@ The hypercube is the logical coordinate system and calculation graph.  A
 database remains the recovery, research, and audit path; a transport remains
 the mechanism for moving events or published generations between machines.
 
-\begin{SNthesis}
+\begin{quote}
+\itshape
 A current analytical value should be cheap to read because its identity,
 layout, type, generation, and provenance were established when it was
 published---not rediscovered by every reader.
-\end{SNthesis}
+\end{quote}
 
 The architecture is motivated by repeated whole-population work.  Given
 entity-aligned weights \(w\), returns \(r\), signals \(s\), and betas

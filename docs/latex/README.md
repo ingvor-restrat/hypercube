@@ -18,11 +18,9 @@ pairs, browser, and replay examples.
 Both papers distinguish implemented behavior from future generation assembly,
 general stateful function cells, transport adapters, and execution authority.
 
-The foundations paper retains the original StrategyNet report layout. The
-callbacks paper follows the plain 11-point article format used by the current
-Volt papers: Palatino and Helvetica typefaces, compact margins, a standard
-title and abstract, and ordinary sections without a separate cover or contents
-page.
+Both papers follow the plain 11-point article format used by the current Volt
+papers: Palatino and Helvetica typefaces, compact margins, and a standard title
+and abstract without a separate cover or contents page.
 
 Build from this directory:
 
