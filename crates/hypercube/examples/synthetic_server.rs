@@ -14,7 +14,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
 use hypercube::synthetic::{market_demo_nodes, OuMarketInjector};
-use hypercube::{HypercubeEngine, SlicePublisher, Snapshot};
+use hypercube::{HypercubeEngine, PublishDurability, SlicePublisher, Snapshot};
 
 const DASHBOARD: &str = include_str!("../demo/index.html");
 
@@ -40,7 +40,7 @@ fn main() -> Result<()> {
         &node_ids,
     )?;
     let initial = engine.update(injector.next_frame(now_ms()).into_update(nodes.clone()))?;
-    publisher.publish(&initial)?;
+    publisher.publish_with_durability(&initial, PublishDurability::MemoryMapped)?;
     let state = Arc::new(RwLock::new(initial));
 
     let generator_state = Arc::clone(&state);
@@ -50,7 +50,7 @@ fn main() -> Result<()> {
         let result = (|| -> Result<Snapshot> {
             let snapshot =
                 engine.update(injector.next_frame(now_ms()).into_update(nodes.clone()))?;
-            publisher.publish(&snapshot)?;
+            publisher.publish_with_durability(&snapshot, PublishDurability::MemoryMapped)?;
             Ok(snapshot)
         })();
         match result {

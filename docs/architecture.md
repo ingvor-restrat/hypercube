@@ -48,6 +48,11 @@ entity.
 The graph is pure: it emits calculated snapshots but has no authority to
 perform external actions.
 
+Node configuration is compiled separately from value evaluation. An unchanged
+declaration reuses indexed dependency edges and topological order while every
+generation still recalculates its values. This removes repeated planning
+without turning the engine into a cross-generation value cache.
+
 `hypercube-circuit` preserves that boundary. It receives an already coherent
 snapshot and provides ordered, stateful processing with logical generation
 time. Replay creates fresh engine and processor state. Transports, persistence,
@@ -59,6 +64,12 @@ A snapshot is coherent in process. `SlicePublisher` projects selected node
 cross-sections into independently stabilized memory-mapped vectors. Readers
 therefore get a coherent snapshot of one slice, not an atomic transaction
 across all slices.
+
+Publisher projection is one pass into preallocated node vectors with cached
+entity slots. Mapped-memory visibility, asynchronous flush, and synchronous
+durability are separate policies. The live synthetic server selects
+visibility; the compatibility `publish()` call selects durability. None
+changes the independent-slice atomicity boundary.
 
 Applications requiring multi-slice decision consistency should consume the
 in-process snapshot or add a generation manifest and reader-pinning protocol.
@@ -94,6 +105,11 @@ advance again until the stateful generation completes. Where the market-data
 source cannot be slowed, archive the normalized input first and let generation
 assembly advance from that durable log.
 
+`RollingMoments` provides fixed-capacity online mean, variance, and z-score
+state for an explicit owner. It does not silently add history to the pure
+graph. A callback that persists this state must still define its checkpoint and
+replay schema.
+
 ## Extraction boundary
 
 The public engine contains reusable mechanics:
@@ -104,6 +120,7 @@ The public engine contains reusable mechanics:
 - field extraction and cross-sectional transforms;
 - topological linear composition;
 - generation monotonicity and deterministic snapshots;
+- reusable graph plans and fixed-capacity rolling moments;
 - synthetic injection and visualization.
 
 Vendor feeds, transports, persistence adapters, proprietary factor

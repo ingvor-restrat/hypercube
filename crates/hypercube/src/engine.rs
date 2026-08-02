@@ -3,7 +3,7 @@
 //! This module owns validation, dependency resolution, transforms, and
 //! snapshot construction. It performs no file or network I/O.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
@@ -316,6 +316,8 @@ pub type CubeResult<T> = Result<T, CubeError>;
 #[derive(Debug, Default)]
 pub struct HypercubeEngine {
     last_generation: Option<u64>,
+    cached_plan: Option<ExecutionPlan>,
+    graph_compilations: u64,
 }
 
 impl HypercubeEngine {
@@ -327,6 +329,14 @@ impl HypercubeEngine {
     /// Return the last successfully completed generation.
     pub fn last_generation(&self) -> Option<u64> {
         self.last_generation
+    }
+
+    /// Return the number of graph plans compiled by this engine.
+    ///
+    /// A stable [`Update::nodes`] declaration is compiled once and reused by
+    /// later generations. Changing any node declaration compiles a new plan.
+    pub fn graph_compilations(&self) -> u64 {
+        self.graph_compilations
     }
 
     /// Validate and evaluate one complete update.
@@ -350,78 +360,64 @@ impl HypercubeEngine {
                 });
             }
         }
-        validate_update(update)?;
+        validate_rows(&update.rows)?;
+        if !self
+            .cached_plan
+            .as_ref()
+            .is_some_and(|plan| plan.nodes == update.nodes)
+        {
+            let plan = ExecutionPlan::compile(&update.nodes)?;
+            self.cached_plan = Some(plan);
+            self.graph_compilations = self.graph_compilations.saturating_add(1);
+        }
+        let plan = self
+            .cached_plan
+            .as_ref()
+            .expect("a valid update always has a compiled plan");
 
-        let entity_times = update
+        let mut entity_times = update
             .rows
             .iter()
-            .map(|row| (row.key.clone(), row.observed_at_ms))
-            .collect::<BTreeMap<_, _>>();
-        let known_nodes = update
-            .nodes
-            .iter()
-            .map(|node| node.id.as_str())
-            .collect::<BTreeSet<_>>();
-        let mut resolved = BTreeMap::<String, BTreeMap<String, CellValue>>::new();
-        let mut statuses = BTreeMap::<String, NodeStatus>::new();
-        let mut pending = update.nodes.iter().collect::<Vec<_>>();
+            .map(|row| (row.key.as_str(), row.observed_at_ms))
+            .collect::<Vec<_>>();
+        entity_times.sort_unstable_by(|left, right| left.0.cmp(right.0));
+        let mut resolved = vec![None; update.nodes.len()];
+        let mut statuses = vec![None; update.nodes.len()];
 
-        while !pending.is_empty() {
-            let mut next = Vec::new();
-            let mut progressed = false;
-            for spec in pending {
-                if !dependencies_ready(spec, &resolved, &known_nodes) {
-                    next.push(spec);
-                    continue;
-                }
-                let started = Instant::now();
-                let values = match &spec.kind {
-                    NodeKind::Field { field } => compute_field(spec, field, &update.rows),
-                    NodeKind::Linear {
-                        inputs,
-                        normalize_weights,
-                    } => compute_linear(spec, inputs, *normalize_weights, &entity_times, &resolved),
-                };
-                let elapsed = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
-                let missing = update.rows.len().saturating_sub(values.len());
-                statuses.insert(
-                    spec.id.clone(),
-                    NodeStatus {
-                        node: spec.id.clone(),
-                        values: values.len(),
-                        missing,
-                        compute_micros: elapsed,
-                    },
-                );
-                resolved.insert(spec.id.clone(), values);
-                progressed = true;
-            }
-            if !progressed {
-                let ids = next
-                    .iter()
-                    .map(|node| node.id.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                return Err(CubeError::DependencyCycle(ids));
-            }
-            pending = next;
+        for &node_index in &plan.order {
+            let spec = &update.nodes[node_index];
+            let started = Instant::now();
+            let values = match &spec.kind {
+                NodeKind::Field { field } => compute_field(spec, field, &update.rows),
+                NodeKind::Linear {
+                    inputs,
+                    normalize_weights,
+                } => compute_linear(
+                    spec,
+                    inputs,
+                    &plan.dependencies[node_index],
+                    *normalize_weights,
+                    &entity_times,
+                    &resolved,
+                ),
+            };
+            let elapsed = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+            let missing = update.rows.len().saturating_sub(values.len());
+            statuses[node_index] = Some(NodeStatus {
+                node: spec.id.clone(),
+                values: values.len(),
+                missing,
+                compute_micros: elapsed,
+            });
+            resolved[node_index] = Some(values);
         }
 
-        let values = update
-            .nodes
-            .iter()
-            .flat_map(|node| {
-                resolved
-                    .remove(&node.id)
-                    .into_iter()
-                    .flat_map(|values| values.into_values())
-            })
+        let values = resolved
+            .into_iter()
+            .flatten()
+            .flat_map(BTreeMap::into_values)
             .collect();
-        let statuses = update
-            .nodes
-            .iter()
-            .filter_map(|node| statuses.remove(&node.id))
-            .collect();
+        let statuses = statuses.into_iter().flatten().collect();
         let snapshot = Snapshot {
             generation: update.generation,
             observed_at_ms: update.observed_at_ms,
@@ -435,9 +431,71 @@ impl HypercubeEngine {
     }
 }
 
-fn validate_update(update: &Update) -> CubeResult<()> {
+#[derive(Debug)]
+struct ExecutionPlan {
+    nodes: Vec<NodeSpec>,
+    order: Vec<usize>,
+    dependencies: Vec<Vec<Option<usize>>>,
+}
+
+impl ExecutionPlan {
+    fn compile(nodes: &[NodeSpec]) -> CubeResult<Self> {
+        validate_nodes(nodes)?;
+        let node_indexes = nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| (node.id.as_str(), index))
+            .collect::<HashMap<_, _>>();
+        let dependencies = nodes
+            .iter()
+            .map(|node| {
+                node.dependencies()
+                    .map(|dependency| node_indexes.get(dependency.node.as_str()).copied())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let mut completed = vec![false; nodes.len()];
+        let mut pending = (0..nodes.len()).collect::<Vec<_>>();
+        let mut order = Vec::with_capacity(nodes.len());
+
+        while !pending.is_empty() {
+            let mut next = Vec::with_capacity(pending.len());
+            let mut progressed = false;
+            for node_index in pending {
+                if dependencies[node_index]
+                    .iter()
+                    .flatten()
+                    .all(|dependency| completed[*dependency])
+                {
+                    completed[node_index] = true;
+                    order.push(node_index);
+                    progressed = true;
+                } else {
+                    next.push(node_index);
+                }
+            }
+            if !progressed {
+                let ids = next
+                    .iter()
+                    .map(|index| nodes[*index].id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(CubeError::DependencyCycle(ids));
+            }
+            pending = next;
+        }
+
+        Ok(Self {
+            nodes: nodes.to_vec(),
+            order,
+            dependencies,
+        })
+    }
+}
+
+fn validate_rows(rows: &[InputRow]) -> CubeResult<()> {
     let mut row_keys = BTreeSet::new();
-    for row in &update.rows {
+    for row in rows {
         if row.key.trim().is_empty() {
             return Err(CubeError::EmptyIdentifier { kind: "row key" });
         }
@@ -445,9 +503,12 @@ fn validate_update(update: &Update) -> CubeResult<()> {
             return Err(CubeError::DuplicateRow(row.key.clone()));
         }
     }
+    Ok(())
+}
 
+fn validate_nodes(nodes: &[NodeSpec]) -> CubeResult<()> {
     let mut node_ids = BTreeSet::new();
-    for node in &update.nodes {
+    for node in nodes {
         if node.id.trim().is_empty() {
             return Err(CubeError::EmptyIdentifier { kind: "node id" });
         }
@@ -484,7 +545,7 @@ fn validate_update(update: &Update) -> CubeResult<()> {
         }
     }
 
-    for node in &update.nodes {
+    for node in nodes {
         for dependency in node.dependencies().filter(|dependency| dependency.required) {
             if !node_ids.contains(dependency.node.as_str()) {
                 return Err(CubeError::UnknownDependency {
@@ -495,17 +556,6 @@ fn validate_update(update: &Update) -> CubeResult<()> {
         }
     }
     Ok(())
-}
-
-fn dependencies_ready(
-    spec: &NodeSpec,
-    resolved: &BTreeMap<String, BTreeMap<String, CellValue>>,
-    known_nodes: &BTreeSet<&str>,
-) -> bool {
-    spec.dependencies().all(|input| {
-        resolved.contains_key(&input.node)
-            || (!input.required && !known_nodes.contains(input.node.as_str()))
-    })
 }
 
 fn compute_field(spec: &NodeSpec, field: &str, rows: &[InputRow]) -> BTreeMap<String, CellValue> {
@@ -542,19 +592,22 @@ fn compute_field(spec: &NodeSpec, field: &str, rows: &[InputRow]) -> BTreeMap<St
 fn compute_linear(
     spec: &NodeSpec,
     inputs: &[WeightedInput],
+    dependency_indexes: &[Option<usize>],
     normalize_weights: bool,
-    entity_times: &BTreeMap<String, i64>,
-    resolved: &BTreeMap<String, BTreeMap<String, CellValue>>,
+    entity_times: &[(&str, i64)],
+    resolved: &[Option<BTreeMap<String, CellValue>>],
 ) -> BTreeMap<String, CellValue> {
     let mut raw = Vec::new();
-    for (key, input_time) in entity_times {
+    for &(key, input_time) in entity_times {
         let mut value = 0.0;
         let mut scale = 0.0;
-        let mut observed_at_ms = *input_time;
+        let mut observed_at_ms = input_time;
         let mut any = false;
         let mut missing_required = false;
-        for input in inputs {
-            let cell = resolved.get(&input.node).and_then(|values| values.get(key));
+        for (input, dependency_index) in inputs.iter().zip(dependency_indexes) {
+            let cell = dependency_index
+                .and_then(|index| resolved[index].as_ref())
+                .and_then(|values| values.get(key));
             match cell {
                 Some(cell) => {
                     value += input.weight * cell.value;
@@ -577,7 +630,7 @@ fn compute_linear(
         }
         if value.is_finite() {
             raw.push(RawValue {
-                key: key.clone(),
+                key: key.to_owned(),
                 value,
                 observed_at_ms,
             });
@@ -665,10 +718,10 @@ fn ranks(values: &[RawValue]) -> Vec<f64> {
         .enumerate()
         .map(|(index, value)| (index, value.value))
         .collect::<Vec<_>>();
-    ordered.sort_by(|left, right| {
+    ordered.sort_unstable_by(|left, right| {
         left.1
-            .partial_cmp(&right.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
+            .total_cmp(&right.1)
+            .then_with(|| left.0.cmp(&right.0))
     });
 
     let mut ranks = vec![0.0; values.len()];
@@ -745,6 +798,34 @@ mod tests {
         assert_eq!(snapshot.value("rank", "A"), Some(1.5));
         assert_eq!(snapshot.value("rank", "B"), Some(1.5));
         assert_eq!(snapshot.value("rank", "C"), Some(3.0));
+    }
+
+    #[test]
+    fn stable_graphs_reuse_the_compiled_plan() {
+        let mut engine = HypercubeEngine::new();
+        for generation in 1..=3 {
+            engine
+                .update(Update {
+                    generation,
+                    observed_at_ms: generation as i64 * 1_000,
+                    mode: ExecutionMode::Live,
+                    rows: vec![row("A", generation as f64, 0.0)],
+                    nodes: vec![NodeSpec::field("value", "a", Transform::Identity)],
+                })
+                .unwrap();
+        }
+        assert_eq!(engine.graph_compilations(), 1);
+
+        engine
+            .update(Update {
+                generation: 4,
+                observed_at_ms: 4_000,
+                mode: ExecutionMode::Live,
+                rows: vec![row("A", 4.0, 0.0)],
+                nodes: vec![NodeSpec::field("rank", "a", Transform::Rank)],
+            })
+            .unwrap();
+        assert_eq!(engine.graph_compilations(), 2);
     }
 
     #[test]

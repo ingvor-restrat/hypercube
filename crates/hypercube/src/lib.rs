@@ -14,13 +14,15 @@
 
 mod engine;
 mod publisher;
+mod rolling;
 pub mod synthetic;
 
 pub use engine::{
     CellValue, CubeError, CubeResult, ExecutionMode, HypercubeEngine, InputRow, NodeKind, NodeSpec,
     NodeStatus, Snapshot, Transform, Update, WeightedInput,
 };
-pub use publisher::SlicePublisher;
+pub use publisher::{PublishDurability, SlicePublisher};
+pub use rolling::{RollingError, RollingMoments};
 
 /// The memory-mapped live-state API used by Hypercube.
 pub use hypercube_slice as slice;

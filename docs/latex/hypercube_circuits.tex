@@ -100,7 +100,7 @@
 
 \title{Hypercube Circuits: realtime linear algebra with stateful triggers and replay}
 \author{research@strategynet.ai}
-\date{July 2026}
+\date{August 2026}
 
 \begin{document}
 \maketitle
@@ -116,7 +116,7 @@
   replayed through a fresh engine to check the calculations and callback state. 
   The demo replays 40 generations, 6,400 factor cells, 1,280 trigger-state cells, 
   and 78 transitions without a mismatch. Aeron, raw-feed replay, checkpoints, 
-  benchmarks, and execution are not yet included.\end{abstract}
+  circuit-runtime benchmarks, and execution are not yet included.\end{abstract}
 
 \section{Using Hypercube Across Updates}
 
@@ -683,13 +683,23 @@ inventory, quoted spread, creation-unit size, costs, and execution limits.
 \subsection{Pairs residuals and triggers}
 
 The pairs monitor publishes 120 cells over 24 stable pair entities.  Its
-residual and standardization are
+residual is
 \[
-  y_{j,g}=\log A_{j,g}-\alpha_j-\beta_j\log B_{j,g},
-\qquad
-  z_{j,g}=\frac{y_{j,g}}{\sigma_j/\sqrt{1-\phi_j^2}}.
+  y_{j,g}=\log A_{j,g}-\alpha_j-\beta_j\log B_{j,g}.
 \]
-Half-life and cross-sectional opportunity rank remain separate nodes.
+It standardizes the current residual against the preceding \(W=20\)
+observations, not a window containing the current observation.  With
+\(\mathcal W_{j,g}=\{y_{j,g-W},\ldots,y_{j,g-1}\}\),
+\[
+  \bar y_{j,g}=\frac{1}{W}\sum_{u\in\mathcal W_{j,g}}u,
+  \qquad
+  z_{j,g}=\frac{y_{j,g}-\bar y_{j,g}}
+                 {\sqrt{W^{-1}\sum_{u\in\mathcal W_{j,g}}
+                 (u-\bar y_{j,g})^2}}.
+\]
+Scoring occurs before the current residual enters the fixed-capacity rolling
+window, avoiding look-ahead.  Model half-life and cross-sectional opportunity
+rank remain separate nodes.
 
 \begin{figure}[H]
 \centering
@@ -701,9 +711,9 @@ standardized dislocations while retaining hedge ratio and half-life context.}
 
 The threshold callback can enter only after the \(z\)-score remains large for
 several generations and exit at a lower threshold.  If either leg disappears,
-it reports invalidation rather than convergence.  Estimation windows,
-structural-break detection, borrow, costs, and portfolio limits remain outside
-the demo.
+it reports invalidation rather than convergence.  Out-of-sample parameter
+fitting, structural-break detection, borrow, costs, and portfolio limits remain
+outside the demo.
 
 \subsection{Browser and \SLICE{} output}
 
@@ -783,25 +793,30 @@ state reset, and output comparison.
 
 \subsection{Test results}
 
-The workspace currently runs 29 tests:
+The workspace currently runs 37 tests:
 \begin{center}
 \begin{tabularx}{0.86\textwidth}{@{}X r l@{}}
 \toprule
 Suite & Tests & Result \\
 \midrule
-engine, publisher, and synthetic injectors & 6 & passed \\
+engine, publisher, and synthetic injectors & 7 & passed \\
+fixed-capacity rolling moments & 6 & passed \\
 ETF and pairs example invariants & 2 & passed \\
-\SLICE{} layout, mmap, records, and vector algebra & 7 & passed \\
+\SLICE{} layout, mmap, records, and vector algebra & 8 & passed \\
 circuit, triggers, recording, digest, and replay & 14 & passed \\
 \midrule
-\textbf{Total} & \textbf{29} & \textbf{passed} \\
+\textbf{Total} & \textbf{37} & \textbf{passed} \\
 \bottomrule
 \end{tabularx}
 \end{center}
 
-The workspace also passes formatting, clippy with warnings denied, and public
-API documentation with warnings denied.  These are conformance and packaging
-checks; the repository still makes no latency or throughput claim.
+The workspace also passes formatting, clippy with warnings denied, public API
+documentation with warnings denied, and the independently verifiable
+\texttt{hypercube-slice} package check.  The engine and circuit follow their
+local dependencies in registry publication order.  These are conformance and
+packaging checks; the same all-target suite also passes under the declared
+minimum compiler, Rust 1.81.0.  This circuits paper still makes no latency or
+throughput claim.
 
 \section{Practical Use and Next Steps}
 
@@ -851,7 +866,8 @@ The current code covers one complete calculation-and-replay path:
         are specified but not implemented;
   \item complete updates are replayed, not raw vendor events or generation
         assembly;
-  \item one threshold processor is provided; general callback composition,
+  \item one threshold processor is provided; a reusable rolling-moment
+        primitive now exists, but general callback composition, serialized
         window state, and model artifacts need additional schemas;
   \item replay begins at generation zero; state checkpoints and seek are not
         implemented;
@@ -859,7 +875,7 @@ The current code covers one complete calculation-and-replay path:
         authenticity proof;
   \item state vectors are public structs but no dedicated trigger-to-\SLICE{}
         publisher is included;
-  \item no benchmark justifies a wait strategy, ring size, or deployment
+  \item no circuit benchmark justifies a wait strategy, ring size, or deployment
         topology for production;
   \item no external-effect or trading authority exists in the circuit crate.
 \end{itemize}
@@ -877,8 +893,8 @@ The next implementation work is:
   \item define multi-stream generation seals and late-event handling;
   \item add processor checkpoints and verified seek;
   \item add counterfactual configuration and first-mismatch comparison;
-  \item benchmark latency, backlog, CPU, allocation, and recovery time for each
-        supported deployment;
+  \item benchmark circuit latency, backlog, CPU, allocation, and recovery time
+        for each supported deployment;
   \item add an idempotent simulated effect adapter before considering live
         execution.
 \end{enumerate}
@@ -895,8 +911,8 @@ The immediate use is a factor-to-signal service for monitors, alerts, and
 strategy inputs.  ETF and pairs provide calculation examples, the browser
 provides current output, and the replay demo checks 40 recorded generations.
 Publishing callback state to \SLICE{} is the next practical addition.  Aeron
-transport, raw-feed reconstruction, checkpoints, benchmarks, and execution
-remain future work.
+transport, raw-feed reconstruction, checkpoints, circuit benchmarks, and
+execution remain future work.
 
 \begin{thebibliography}{9}
 
@@ -904,7 +920,7 @@ remain future work.
 StrategyNet,
 \emph{Hypercube: Current analytical state without rebuilding it
 for every reader},
-Open-source working paper, version 0.2, July 2026,
+Open-source working paper, August 2026,
 \url{https://github.com/ingvor-restrat/hypercube/blob/main/docs/latex/hypercube_foundations.pdf}.
 
 \bibitem{lmax}

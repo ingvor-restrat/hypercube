@@ -5,6 +5,7 @@
 //! pair-aligned graph and ranks the largest standardized dislocations.
 
 use std::cmp::Ordering;
+use std::collections::VecDeque;
 use std::f64::consts::TAU;
 use std::io::{self, IsTerminal, Write};
 use std::thread;
@@ -17,7 +18,9 @@ use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use hypercube::{ExecutionMode, HypercubeEngine, InputRow, NodeSpec, Snapshot, Transform, Update};
+use hypercube::{
+    ExecutionMode, HypercubeEngine, InputRow, NodeSpec, RollingMoments, Snapshot, Transform, Update,
+};
 
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
@@ -30,6 +33,7 @@ const AMBER: &str = "\x1b[38;5;221m";
 const MUTED: &str = "\x1b[38;5;244m";
 const WHITE: &str = "\x1b[38;5;255m";
 const SPARKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+const SPREAD_WINDOW: usize = 20;
 
 #[derive(Debug)]
 struct Config {
@@ -71,7 +75,8 @@ struct PairState {
     price_b: f64,
     spread_z: f64,
     half_life: f64,
-    history: Vec<f64>,
+    moments: RollingMoments,
+    history: VecDeque<f64>,
 }
 
 #[derive(Debug)]
@@ -104,7 +109,7 @@ fn main() -> Result<()> {
 
     loop {
         tick += 1;
-        update_pairs(&mut pairs, &mut rng);
+        update_pairs(&mut pairs, &mut rng)?;
         let observed_at_ms = tick as i64 * 86_400_000;
         let input_rows = pairs
             .iter()
@@ -190,25 +195,28 @@ fn build_pairs(pair_count: usize) -> Vec<PairState> {
                 price_b,
                 spread_z: 0.0,
                 half_life: 0.5_f64.ln() / phi.ln(),
-                history: vec![0.0],
+                moments: RollingMoments::new(SPREAD_WINDOW)
+                    .expect("the fixed spread window is positive"),
+                history: VecDeque::from([0.0]),
             }
         })
         .collect()
 }
 
-fn update_pairs(pairs: &mut [PairState], rng: &mut XorShift64) {
+fn update_pairs(pairs: &mut [PairState], rng: &mut XorShift64) -> Result<()> {
     for pair in pairs {
         pair.log_b += 0.00015 + 0.012 * rng.normal();
         pair.spread = pair.phi * pair.spread + pair.innovation_sigma * rng.normal();
         pair.price_b = pair.log_b.exp();
         pair.price_a = (pair.alpha + pair.hedge_ratio * pair.log_b + pair.spread).exp();
-        let stationary_sigma = pair.innovation_sigma / (1.0 - pair.phi * pair.phi).sqrt();
-        pair.spread_z = pair.spread / stationary_sigma;
-        pair.history.push(pair.spread_z);
+        pair.spread_z = pair.moments.z_score(pair.spread)?.unwrap_or(0.0);
+        pair.moments.push(pair.spread)?;
+        pair.history.push_back(pair.spread_z);
         if pair.history.len() > 44 {
-            pair.history.remove(0);
+            pair.history.pop_front();
         }
     }
+    Ok(())
 }
 
 fn ranked_rows(snapshot: &Snapshot, pairs: &[PairState]) -> Vec<PairRow> {
@@ -224,7 +232,7 @@ fn ranked_rows(snapshot: &Snapshot, pairs: &[PairState]) -> Vec<PairRow> {
                 spread_z: snapshot.value("spread_z", &pair.id)?,
                 half_life: snapshot.value("half_life", &pair.id)?,
                 opportunity_rank: snapshot.value("opportunity_rank", &pair.id)?,
-                history: pair.history.clone(),
+                history: pair.history.iter().copied().collect(),
             })
         })
         .collect::<Vec<_>>();
@@ -263,7 +271,7 @@ fn render(config: &Config, snapshot: &Snapshot, rows: &[PairRow], color: bool) -
         color,
     ));
     out.push_str(&styled(
-        " zⱼ = yⱼ/(σⱼ/√(1−φⱼ²))    half-lifeⱼ = log(1/2)/log(φⱼ)    rank = rank-z(|zⱼ|)\n",
+        " zⱼ = (yⱼ−mean(yⱼ,t−20:t−1))/sd(yⱼ,t−20:t−1)    half-lifeⱼ = log(1/2)/log(φⱼ)    rank = rank-z(|zⱼ|)\n",
         &[DIM, BLUE],
         color,
     ));
@@ -494,7 +502,7 @@ mod tests {
     #[test]
     fn generated_prices_reconstruct_the_declared_cointegrating_residual() {
         let mut pairs = build_pairs(12);
-        update_pairs(&mut pairs, &mut XorShift64::new(42));
+        update_pairs(&mut pairs, &mut XorShift64::new(42)).unwrap();
         for pair in pairs {
             let reconstructed =
                 pair.price_a.ln() - pair.alpha - pair.hedge_ratio * pair.price_b.ln();

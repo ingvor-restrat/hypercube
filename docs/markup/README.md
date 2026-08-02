@@ -100,12 +100,17 @@ The residual follows its own stationary AR(1) process:
 y_j,t = φ_j y_j,t-1 + σ_j η_j,t
 ```
 
-That gives a model z-score and a model half-life:
+The displayed z-score uses only the preceding 20 residuals, while the known
+AR(1) coefficient still gives the model half-life:
 
 ```text
-z_j,t         = y_j,t / (σ_j / sqrt(1 - φ_j²))
+z_j,t         = (y_j,t - mean(y_j,t-20:t-1)) / sd(y_j,t-20:t-1)
 half_life_j   = log(1/2) / log(φ_j)
 ```
+
+The current residual is scored before it enters the fixed-capacity rolling
+window, avoiding look-ahead in the displayed standardization. Until the prior
+window has nonzero variance, the monitor emits a neutral zero.
 
 Hypercube publishes the two current prices, `spread_z`, `half_life`, and a
 cross-sectional `opportunity_rank = rank-z(|spread_z|)`. The table is sorted by
@@ -114,8 +119,10 @@ leg \(B\); a negative residual reverses the position.
 
 The example holds \(\alpha\), \(\beta\), and \(\phi\) fixed so the calculation
 remains visible. A production pairs process would estimate them on a declared
-window and add stationarity tests, structural-break rules, borrow, costs, and
-exposure limits.
+training window and add out-of-sample selection, stationarity tests,
+structural-break rules, borrow, costs, and exposure limits. See the
+[performance and stat-arb audit](../performance.md) for the reference
+comparison and rolling-window benchmarks.
 
 ## Bounded runs
 

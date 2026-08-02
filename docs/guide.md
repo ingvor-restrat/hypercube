@@ -56,6 +56,8 @@ weights actually available to that entity.
 
 Node declaration order is not execution order. Hypercube resolves the graph
 topologically and returns values in declaration order for stable consumers.
+The validated topology and dependency indexes are compiled once per unchanged
+node declaration and reused across generations.
 
 ## Snapshot coordinates
 
@@ -87,6 +89,11 @@ slices/
 One writer surrounds a vector update with an odd/even epoch. A reader accepts
 the copied vector only when the epoch was the same even value before and after
 the copy. Fixed records use the same idea per slot.
+
+Projection reuses node vectors and cached entity slots. `publish()` waits for a
+durable flush for compatibility. `publish_with_durability()` can instead
+return after mapped-memory visibility or after scheduling asynchronous flush;
+the caller must choose that weaker postcondition deliberately.
 
 This guarantees coherence within one slice. It does not make several separate
 slice files globally atomic. Consumers needing a coherent decision across
@@ -147,8 +154,10 @@ cointegrating residual:
 y_j = log(A_j) - alpha_j - beta_j log(B_j)
 ```
 
-The example standardizes \(y_j\) using its declared AR(1) process and asks
-Hypercube to rank `abs(spread_z)` across the current pair set.
+The example standardizes \(y_j\) against the preceding 20 residuals using the
+fixed-capacity `RollingMoments` primitive. It scores before inserting the
+current observation, then asks Hypercube to rank `abs(spread_z)` across the
+current pair set.
 
 ```bash
 cargo run -p hypercube-engine --example pairs
@@ -156,3 +165,7 @@ cargo run -p hypercube-engine --example pairs
 
 The [recorded walkthrough](markup/README.md) derives both calculations and
 includes bounded commands suitable for CI.
+
+The [performance and stat-arb audit](performance.md) compares this window
+maintenance with allocating and reusable-ring two-pass variants, and explains
+why explicit SIMD and prefetching remain measured opt-ins rather than defaults.

@@ -959,18 +959,7 @@ impl F64SliceReader {
     /// Return up to `limit` finite nonzero slots by descending magnitude.
     pub fn top_abs(&self, limit: usize) -> Result<Vec<(usize, f64)>> {
         let values = self.snapshot_vec()?;
-        let mut indexed: Vec<(usize, f64)> = values
-            .into_iter()
-            .enumerate()
-            .filter(|(_, value)| value.is_finite() && *value != 0.0)
-            .collect();
-        indexed.sort_by(|(_, a), (_, b)| {
-            b.abs()
-                .partial_cmp(&a.abs())
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        indexed.truncate(limit);
-        Ok(indexed)
+        Ok(top_abs(&values, limit))
     }
 
     fn load_u64_atomic(&self, offset: usize) -> u64 {
@@ -1137,6 +1126,17 @@ impl F64SliceWriter {
         self.mmap
             .flush()
             .with_context(|| format!("failed flushing {}", self.path.display()))
+    }
+
+    /// Initiate an asynchronous flush of dirty mapped pages.
+    ///
+    /// Successful return means the operating system accepted the request, not
+    /// that the pages are already durable. Use [`Self::flush`] for a durability
+    /// barrier.
+    pub fn flush_async(&mut self) -> Result<()> {
+        self.mmap
+            .flush_async()
+            .with_context(|| format!("failed scheduling flush for {}", self.path.display()))
     }
 
     /// Refresh writer liveness without changing the data timestamp.
@@ -1484,6 +1484,35 @@ pub fn dot(lhs: &[f64], rhs: &[f64]) -> Result<f64> {
 /// Sum absolute values in an in-memory vector.
 pub fn sum_abs(values: &[f64]) -> f64 {
     values.iter().map(|value| value.abs()).sum()
+}
+
+/// Return up to `limit` finite nonzero values by descending magnitude.
+///
+/// Selection is linear in the input length, followed by a sort of only the
+/// selected prefix. Equal magnitudes are ordered by ascending slot so results
+/// remain deterministic.
+pub fn top_abs(values: &[f64], limit: usize) -> Vec<(usize, f64)> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let mut indexed = values
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, value)| value.is_finite() && *value != 0.0)
+        .collect::<Vec<_>>();
+    let compare = |(left_slot, left): &(usize, f64), (right_slot, right): &(usize, f64)| {
+        right
+            .abs()
+            .total_cmp(&left.abs())
+            .then_with(|| left_slot.cmp(right_slot))
+    };
+    if limit < indexed.len() {
+        indexed.select_nth_unstable_by(limit, compare);
+        indexed.truncate(limit);
+    }
+    indexed.sort_unstable_by(compare);
+    indexed
 }
 
 /// Trim and uppercase a nonempty key without embedded whitespace.

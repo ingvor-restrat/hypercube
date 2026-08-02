@@ -1,7 +1,8 @@
 use hypercube_slice::{
-    default_instrument_id, dot, F64SliceReader, F64SliceWriter, LayoutRegistry, QuoteSliceReader,
-    QuoteSliceWriter, QuoteV1, SliceCatalog, SliceCatalogEntry, TaqV1, TradeSliceReader,
-    TradeSliceWriter, TradeV1, ValueType, TAQ_FLAG_HAS_QUOTE, TAQ_FLAG_QUOTE_STALE,
+    default_instrument_id, dot, top_abs, F64SliceReader, F64SliceWriter, LayoutRegistry,
+    QuoteSliceReader, QuoteSliceWriter, QuoteV1, SliceCatalog, SliceCatalogEntry, TaqV1,
+    TradeSliceReader, TradeSliceWriter, TradeV1, ValueType, TAQ_FLAG_HAS_QUOTE,
+    TAQ_FLAG_QUOTE_STALE,
 };
 
 #[test]
@@ -75,6 +76,17 @@ fn f64_slice_create_write_read_and_dot() {
     assert_eq!(left_reader.value_at(1).unwrap(), 2.0);
     assert_eq!(left_reader.dot(&right_reader).unwrap(), 140.0);
     assert_eq!(dot(&[1.0, -2.0], &[3.0, 4.0]).unwrap(), -5.0);
+}
+
+#[test]
+fn top_abs_is_bounded_and_deterministic() {
+    let values = [f64::NAN, -4.0, 0.0, 4.0, 3.0, f64::INFINITY, -2.0];
+    assert_eq!(top_abs(&values, 0), vec![]);
+    assert_eq!(top_abs(&values, 2), vec![(1, -4.0), (3, 4.0)]);
+    assert_eq!(
+        top_abs(&values, usize::MAX),
+        vec![(1, -4.0), (3, 4.0), (4, 3.0), (6, -2.0)]
+    );
 }
 
 #[test]

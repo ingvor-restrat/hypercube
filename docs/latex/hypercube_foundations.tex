@@ -91,7 +91,7 @@
 
 \title{Hypercube: core memory-mapped real time factors}
 \author{research@strategynet.ai}
-\date{July 2026}
+\date{August 2026}
 
 \begin{document}
 \maketitle
@@ -107,8 +107,12 @@ entity-aligned values.  Hypercube evaluates one coherent input generation
 through a declared node graph and produces cross-sectional outputs that can be
 published back as aligned slices.  The public repository includes the format,
 readers and writers, calculation engine, deterministic synthetic sources, and
-live browser and terminal demonstrations.  This paper explains that
-implemented path and its limits.  Separate slices are not yet one atomic
+live browser and terminal demonstrations.  The current implementation also
+reuses compiled graph plans and publication buffers, distinguishes mapped
+visibility from durable flush, and supplies fixed-capacity online moments for
+explicit state owners.  A reproducible benchmark suite tests those choices.
+This paper explains that implemented path and its limits.  Separate slices are
+not yet one atomic
 multi-slice generation; vendor feeds, durable persistence, arbitrary function
 cells, replication, GPU lowering, and trading actions remain outside the
 current release.  Although the examples use markets, the API also works for
@@ -600,11 +604,20 @@ transformed.  A zero available denominator emits no value.
 
 \section{Resident state and incremental work}
 
-The engine retains only the last successfully completed generation as a
-monotonicity guard.  Every accepted update supplies complete rows and node
-specifications and recalculates the graph; there are no built-in price
-histories, session accumulators, alias registries, or cross-generation
-incremental cache.
+The engine retains the last successfully completed generation as a
+monotonicity guard and one compiled plan for the most recent node declaration.
+Every accepted update still supplies complete rows and node specifications and
+recalculates every value.  When the declaration is unchanged, validation has
+already produced indexed dependency edges and a topological order, so later
+generations do not rediscover the same schedule.  The public
+\texttt{graph\_compilations()} counter makes topology churn observable.
+
+This is configuration reuse, not a cross-generation value cache.  The pure
+graph still has no built-in price histories, session accumulators, alias
+registries, or implicit window state.  The separate \texttt{RollingMoments}
+primitive gives a simulator or explicitly stateful callback a preallocated
+circular window with online mean and variance.  Its checkpoint and replay
+schema remain the responsibility of that state owner.
 
 The natural extension is change-directed evaluation:
 \[
@@ -637,9 +650,14 @@ replication, and production gateways are outside the repository.}
 \end{figure}
 
 \texttt{SlicePublisher} writes one configured \(f64\) slice per selected node
-and publishes \texttt{layout.json} and \texttt{catalog.json}.  Those files are
-independently coherent; the in-process \texttt{Snapshot} is the coherent
-whole-generation object.  The synthetic server also serves a dependency-free
+and publishes \texttt{layout.json} and \texttt{catalog.json}.  Projection
+reuses one vector per node, caches entity slots, and scans snapshot cells once.
+Mapped-memory visibility, asynchronous flush, and synchronous durability are
+explicit policies.  The compatibility \texttt{publish()} method remains
+durable; the synthetic live view deliberately selects visibility.  Those
+slices are independently coherent under every policy; the in-process
+\texttt{Snapshot} is the coherent whole-generation object.  The synthetic
+server also serves a dependency-free
 browser dashboard, a JSON snapshot, and an SSE stream.  The \texttt{etf} and
 \texttt{pairs} examples run separate top-like terminal monitors over basket
 premiums and cointegrating residuals.  These paths make the architecture
@@ -780,17 +798,26 @@ hedge ratio \(\beta_j\).  Their cointegrating residual is
   \qquad
   y_{j,g}=\phi_j y_{j,g-1}+\sigma_j\eta_{j,g}.
 \]
-The graph publishes current prices, the standardized residual, model
-half-life, and a cross-sectional rank of absolute residual size:
+The monitor standardizes the current residual against the preceding
+\(W=20\) residuals.  If
+\(\mathcal W_{j,g}=\{y_{j,g-W},\ldots,y_{j,g-1}\}\), then
 \[
-  z_{j,g}=\frac{y_{j,g}}{\sigma_j/\sqrt{1-\phi_j^2}},
+  \bar y_{j,g}=\frac{1}{W}\sum_{u\in\mathcal W_{j,g}}u,
+  \qquad
+  z_{j,g}=\frac{y_{j,g}-\bar y_{j,g}}
+                 {\sqrt{W^{-1}\sum_{u\in\mathcal W_{j,g}}(u-\bar y_{j,g})^2}},
   \qquad
   h_j=\frac{\log(1/2)}{\log\phi_j}.
 \]
-The table shows the largest live dislocations and the sign-implied hedged
-position.  Fixed parameters keep the example readable; estimation,
-stationarity tests, structural breaks, costs, borrow, and exposure controls
-remain outside it.
+Scoring occurs before \(y_{j,g}\) enters the circular window, so an observation
+does not estimate its own center and scale.  Until the prior window has
+nonzero variance the display emits a neutral zero.  Hypercube publishes current
+prices, this rolling residual score, model half-life, and a cross-sectional
+rank of absolute residual size.  The table shows the largest live dislocations
+and the sign-implied hedged position.  Fixed \(\alpha_j\), \(\beta_j\), and
+\(\phi_j\) keep the example readable; out-of-sample estimation, stationarity
+tests, structural breaks, costs, borrow, and exposure controls remain outside
+it.
 
 \begin{figure}[ht]
 \centering
@@ -860,12 +887,13 @@ Component & Implemented responsibilities & Present boundary \\
 \texttt{hypercube-slice} &
 layout and catalog validation; versioned headers; \(f64\), quote, trade, and
 TAQ mappings; point and vector readers/writers; stable snapshots, sums, dot
-products, and top-absolute scans &
+products, and bounded top-absolute selection &
 little-endian; one writer per slice; local file-backed mappings \\
 \texttt{hypercube-engine} &
 generation-checked updates; field and linear nodes; five cross-sectional
-transforms; deterministic snapshots and status; output
-\texttt{SlicePublisher}; generic and OU market injectors; HTTP/SSE plus
+transforms; reusable graph plans; deterministic snapshots and status;
+fixed-capacity rolling moments; buffered output \texttt{SlicePublisher} with
+explicit durability; generic and OU market injectors; HTTP/SSE plus
 \texttt{etf} and \texttt{pairs} terminal demonstrations &
 complete in-process rows per update; no vendor adapter, persistence, general
 function cells, or production web service \\
@@ -894,20 +922,135 @@ slices:
   256 + 8\cdot 8 = 320\ \text{bytes per slice}.
 \]
 The dashboard, JSON snapshot, and SSE stream expose that same state.  This is
-a functional and packaging baseline, not a latency or throughput benchmark;
-the public repository makes no development-host performance claim.
+a functional and packaging baseline.  The following benchmark is reported
+separately so its host and postconditions remain explicit.
+
+\section{Design-pattern audit and measured performance}
+
+The implementation was cross-checked against the Imperial HFT design-pattern
+and pairs-trading corpus at commit \texttt{5783606} \cite{imperial}.  Its most
+useful result was not a particular intrinsic.  Reusing the pairs window alone
+reduced its checked-in benchmark median from 334.7 to 172.9 microseconds; the
+combined fixed buffer, one-pass moments, and AVX variant reached 66.3
+microseconds.  Explicit SIMD alone reached 302.9 microseconds, while software
+prefetching made no material difference in its separate scan.  This motivates
+algorithm and allocation work before architecture-specific instructions.
+
+Hypercube therefore adopted four bounded changes:
+\begin{enumerate}
+  \item compile stable dependency declarations once and reuse indexed plans;\par
+  \item cache entity slots and reuse one publication vector per node;\par
+  \item maintain rolling moments with a fixed circular buffer;\par
+  \item select a small top set in linear time and sort only that prefix.\par
+\end{enumerate}
+Forced inlining, manual unrolling, prefetching, and explicit SIMD remain
+benchmark-gated.  Rust's portable SIMD API is still experimental, and target
+features require an explicit deployment contract \cite{rustsimd,rusttarget}.
+
+For the rolling window, state is \((n,\mu,M_2)\), where
+\(M_2=\sum_i(x_i-\mu)^2\).  Adding \(x\) uses the centered Welford update
+\cite{welford}:
+\[
+  n'=n+1,\qquad
+  \delta=x-\mu,\qquad
+  \mu'=\mu+\frac{\delta}{n'},\qquad
+  M_2'=M_2+\delta(x-\mu').
+\]
+When a full window evicts oldest value \(x_o\), the removal identity is
+\[
+  n^-=n-1,\qquad
+  \mu^-=\frac{n\mu-x_o}{n^-},\qquad
+  M_2^-=M_2-(x_o-\mu)(x_o-\mu^-),
+\]
+then the addition update is applied.  These centered formulas avoid the
+cancellation-prone difference of large raw sums; a bounded periodic corrected
+two-pass rebuild limits accumulated roundoff \cite{chanvariance}.  The
+implementation stores the mean as an offset from a retained window origin, so
+a large common level does not consume the precision needed for a small
+residual variance.
+
+The committed Criterion 0.7 harness \cite{criterion} used 30 samples after a
+one-second warmup and a three-second measurement target.  Before and after
+lanes used identical benchmark source and tool version.  The host was an AMD
+Ryzen Threadripper PRO 7985WX running Linux 6.8, Rust 1.97.1 and LLVM 22.1.6,
+with the standard bench profile and no native-CPU or explicit SIMD flags.
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{@{}X r r r@{}}
+\toprule
+Benchmark & Before/reference & Current & Result \\
+\midrule
+stable five-node graph, 128 entities & 106.18 \(\mu\mathrm{s}\) & 96.99 \(\mu\mathrm{s}\) & \(-8.55\%\) \\
+stable five-node graph, 1,024 entities & 998.31 \(\mu\mathrm{s}\) & 888.30 \(\mu\mathrm{s}\) & \(-11.59\%\) \\
+durable five-slice publish, 1,024 entities & 9.071 ms & 3.494 ms & \(-62.08\%\) \\
+rolling z-score, 4,064 observations & 156.43 \(\mu\mathrm{s}\) & 44.53 \(\mu\mathrm{s}\) & \(3.51\times\) \\
+top 10 of 16,384 finite values & 296.92 \(\mu\mathrm{s}\) & 47.92 \(\mu\mathrm{s}\) & \(6.20\times\) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1.55cm,y=0.72cm]
+  \draw[->,black!70] (0,0) -- (7.7,0);
+  \draw[->,black!70] (0,0) -- (0,6.8) node[above,font=\scriptsize]{speedup};
+  \foreach \y in {1,...,6} {
+    \draw[black!15] (0,\y) -- (7.45,\y);
+    \node[left,font=\scriptsize] at (0,\y) {\y\(\times\)};
+  }
+  \fill[blue!55] (0.55,0) rectangle (1.25,1.09);
+  \fill[blue!55] (2.00,0) rectangle (2.70,1.12);
+  \fill[blue!55] (3.45,0) rectangle (4.15,2.60);
+  \fill[blue!55] (4.90,0) rectangle (5.60,3.51);
+  \fill[blue!55] (6.35,0) rectangle (7.05,6.20);
+  \node[above,font=\scriptsize] at (0.90,1.09) {1.09};
+  \node[above,font=\scriptsize] at (2.35,1.12) {1.12};
+  \node[above,font=\scriptsize] at (3.80,2.60) {2.60};
+  \node[above,font=\scriptsize] at (5.25,3.51) {3.51};
+  \node[above,font=\scriptsize] at (6.70,6.20) {6.20};
+  \node[below=2mm,align=center,font=\scriptsize] at (0.90,0) {graph\\128};
+  \node[below=2mm,align=center,font=\scriptsize] at (2.35,0) {graph\\1,024};
+  \node[below=2mm,align=center,font=\scriptsize] at (3.80,0) {durable\\publish};
+  \node[below=2mm,align=center,font=\scriptsize] at (5.25,0) {rolling\\moments};
+  \node[below=2mm,align=center,font=\scriptsize] at (6.70,0) {top-10\\select};
+\end{tikzpicture}
+\caption{Central-estimate speedup against the matched pre-change or reference
+lane.  The first three are before/after Hypercube results; the final two compare
+algorithms in the same current harness.}
+\label{fig:performance-speedup}
+\end{figure}
+
+At 128 entities the durable publisher remained statistically unchanged because
+the synchronous operating-system flush dominates.  The explicit mapped-memory
+policy measured 12.76 microseconds at 128 entities and 109.04 microseconds at
+1,024, but it has a weaker postcondition: visibility is not durable storage
+\cite{memmapflush}.  The host was not isolated, frequency-locked, or
+core-pinned.  These are development-host microbenchmarks rather than tail
+latency, contention, NUMA, crash-recovery, or production-SLA evidence.  Full
+commands, confidence limits, and the pattern-by-pattern audit are checked in as
+\texttt{docs/performance.md}.
 
 \section{Conformance tests}
 
-The current workspace has thirteen Rust tests:
+The current workspace has 37 Rust tests:
 \begin{enumerate}
-  \item six engine, publisher, and synthetic-injector tests cover dependency
-        cycles, stale generations, tie-aware ranking, deterministic generic and
-        OU market input, and aligned publication;
-  \item seven slice tests cover layouts and catalogs, format compatibility,
-        \(f64\) vector reads and dot products, heartbeat semantics, and quote,
-        trade, and TAQ records.
+  \item seven engine, publisher, and synthetic-injector tests cover dependency
+        cycles, plan reuse, stale generations, tie-aware ranking, deterministic
+        inputs, and aligned publication;
+  \item six rolling-moment tests cover eviction, no-look-ahead scoring,
+        non-finite input, large-offset and sub-epsilon variance retention, and
+        agreement with corrected two-pass windows;
+  \item two financial-example tests cover long-only ETF weights and exact
+        reconstruction of the declared pair residual;
+  \item eight slice tests cover layouts and catalogs, format compatibility,
+        vector algebra, bounded top selection, heartbeat semantics, and fixed
+        records;
+  \item fourteen circuit tests cover ring backpressure, trigger state,
+        recording, digests, and fresh-state replay.
 \end{enumerate}
+The complete all-target suite, including the benchmark smoke harness, also
+passes under the declared minimum compiler, Rust 1.81.0.
 
 Foreign-language byte fixtures, high-contention stress, interrupted writers,
 cross-process x86-64 and aarch64 evidence, immutable generation pinning, and
@@ -956,8 +1099,9 @@ stages:
         implementation, synthetic fixture, and current conformance tests;
   \item add portable readers and an ABI corpus that proves the same bytes have
         the same meaning outside Rust;
-  \item benchmark point counters and vector epochs under declared writer and
-        reader loads on x86-64 and aarch64;
+  \item extend the reproducible single-process benchmarks to point counters,
+        vector retries, concurrent writers and readers, tail latency, x86-64,
+        and aarch64;
   \item implement a general immutable generation manifest with reader pinning,
         crash recovery, and optional changed-shard publication;
   \item formalize typed pure and stateful function-cell interfaces, dependency
@@ -1001,10 +1145,10 @@ without allowing convenience to erase provenance, freshness, or authority.
 The germinal system is therefore already present: a live memory plane, an
 aligned multidimensional calculation model, and versioned outputs that can be
 read repeatedly at low cost.  The open-source work is to make its guarantees
-portable, its generation semantics complete, its benchmarks reproducible, and
-its function boundary explicit.
+portable, its generation semantics complete, its benchmarks representative
+across deployment classes, and its function boundary explicit.
 
-\begin{thebibliography}{9}
+\begin{thebibliography}{14}
 
 \bibitem{posixmmap}
 The Open Group,
@@ -1057,6 +1201,45 @@ F. McSherry, D. G. Murray, R. Isaacs, and M. Isard,
 \emph{Differential Dataflow},
 CIDR, 2013,
 \url{https://www.cidrdb.org/cidr2013/Papers/CIDR13_Paper111.pdf}.
+
+\bibitem{imperial}
+B. M. Gunduz,
+\emph{Low-Latency Programming Repository for High-Frequency Trading},
+commit \texttt{5783606}, 2026,
+\url{https://github.com/0burak/imperial_hft}.
+
+\bibitem{criterion}
+Criterion.rs Project,
+\emph{Criterion.rs: statistics-driven microbenchmarking},
+\url{https://bheisler.github.io/criterion.rs/book/}.
+
+\bibitem{welford}
+B. P. Welford,
+\emph{Note on a Method for Calculating Corrected Sums of Squares and Products},
+Technometrics, 4(3), pp.~419--420, 1962,
+\url{https://doi.org/10.1080/00401706.1962.10490022}.
+
+\bibitem{chanvariance}
+T. F. Chan, G. H. Golub, and R. J. LeVeque,
+\emph{Algorithms for Computing the Sample Variance: Analysis and
+Recommendations},
+The American Statistician, 37(3), pp.~242--247, 1983,
+\url{https://doi.org/10.1080/00031305.1983.10483115}.
+
+\bibitem{memmapflush}
+The memmap2 Project,
+\emph{MmapMut flush and flush\_async contracts},
+\url{https://docs.rs/memmap2/latest/memmap2/struct.MmapMut.html}.
+
+\bibitem{rustsimd}
+The Rust Project,
+\emph{Portable SIMD (nightly experimental API)},
+\url{https://doc.rust-lang.org/nightly/std/simd/struct.Simd.html}.
+
+\bibitem{rusttarget}
+The Rust Project,
+\emph{Code generation target-feature attribute},
+\url{https://doc.rust-lang.org/stable/reference/attributes/codegen.html}.
 
 \end{thebibliography}
 

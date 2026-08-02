@@ -4,7 +4,7 @@
 //! each selected node. Cross-slice atomicity remains outside this module's
 //! contract.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
@@ -22,7 +22,25 @@ use crate::Snapshot;
 pub struct SlicePublisher {
     root: PathBuf,
     layout: LayoutRegistry,
-    writers: BTreeMap<String, F64SliceWriter>,
+    nodes: BTreeMap<String, PublishedNode>,
+    slots: HashMap<String, usize>,
+}
+
+struct PublishedNode {
+    writer: F64SliceWriter,
+    buffer: Vec<f64>,
+}
+
+/// Persistence behavior after a snapshot becomes visible in mapped memory.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PublishDurability {
+    /// Return after the writer epochs make the new values visible to readers.
+    MemoryMapped,
+    /// Ask the operating system to begin flushing dirty pages without waiting.
+    Async,
+    /// Wait until every configured slice reports its dirty pages as durable.
+    #[default]
+    Durable,
 }
 
 impl SlicePublisher {
@@ -86,7 +104,7 @@ impl SlicePublisher {
         }
 
         layout.save_pretty(&layout_path)?;
-        let mut writers = BTreeMap::new();
+        let mut nodes = BTreeMap::new();
         let mut catalog = SliceCatalog::default();
         let layout_hash = layout.layout_hash()?;
         for (node, path) in paths {
@@ -101,13 +119,25 @@ impl SlicePublisher {
                 role: "node_output".to_owned(),
                 description: Some(format!("Hypercube output for node {node}")),
             })?;
-            writers.insert(node.clone(), writer);
+            nodes.insert(
+                node,
+                PublishedNode {
+                    writer,
+                    buffer: vec![f64::NAN; layout.active_len() as usize],
+                },
+            );
         }
         catalog.save_pretty(root.join("catalog.json"))?;
+        let slots = entity_keys
+            .iter()
+            .enumerate()
+            .map(|(slot, key)| (key.clone(), slot))
+            .collect();
         Ok(Self {
             root,
             layout,
-            writers,
+            nodes,
+            slots,
         })
     }
 
@@ -124,30 +154,83 @@ impl SlicePublisher {
     /// Publish every configured node from one coherent engine snapshot.
     ///
     /// Each output slice becomes coherent independently. This method does not
-    /// claim atomic publication across the complete set of files.
+    /// claim atomic publication across the complete set of files. For backward
+    /// compatibility this method performs a durability barrier after updating
+    /// all slices. Low-latency views should use
+    /// [`Self::publish_with_durability`] with
+    /// [`PublishDurability::MemoryMapped`].
     pub fn publish(&mut self, snapshot: &Snapshot) -> Result<()> {
+        self.publish_with_durability(snapshot, PublishDurability::Durable)
+    }
+
+    /// Publish a snapshot using an explicit memory-versus-durability policy.
+    ///
+    /// Projection is performed in one pass over the snapshot into buffers
+    /// allocated when the publisher is created. Writer epochs are completed
+    /// for every node before the selected flush policy is applied.
+    pub fn publish_with_durability(
+        &mut self,
+        snapshot: &Snapshot,
+        durability: PublishDurability,
+    ) -> Result<()> {
+        for published in self.nodes.values_mut() {
+            published.buffer.fill(f64::NAN);
+        }
         for value in &snapshot.values {
-            if !self.writers.contains_key(&value.node) {
+            let slot = match self.slots.get(&value.key).copied() {
+                Some(slot) => slot,
+                None => {
+                    let slot =
+                        self.layout.slot_for_entity(&value.key)?.ok_or_else(|| {
+                            anyhow!("snapshot contains unknown entity {}", value.key)
+                        })? as usize;
+                    self.slots.insert(value.key.clone(), slot);
+                    slot
+                }
+            };
+            let published = self.nodes.get_mut(&value.node).ok_or_else(|| {
+                anyhow!("snapshot contains unconfigured slice node {}", value.node)
+            })?;
+            if slot >= published.buffer.len() {
                 return Err(anyhow!(
-                    "snapshot contains unconfigured slice node {}",
-                    value.node
+                    "snapshot entity {} resolves outside the active layout",
+                    value.key
                 ));
             }
+            published.buffer[slot] = value.value;
         }
 
-        for (node, writer) in &mut self.writers {
-            let mut vector = vec![f64::NAN; self.layout.active_len() as usize];
-            for value in snapshot.values.iter().filter(|value| value.node == *node) {
-                let slot = self
-                    .layout
-                    .slot_for_entity(&value.key)?
-                    .ok_or_else(|| anyhow!("snapshot contains unknown entity {}", value.key))?;
-                vector[slot as usize] = value.value;
-            }
-            writer.update_vector(|output| output.copy_from_slice(&vector))?;
-            writer
+        for published in self.nodes.values_mut() {
+            let buffer = &published.buffer;
+            published
+                .writer
+                .update_vector(|output| output.copy_from_slice(buffer))?;
+        }
+        match durability {
+            PublishDurability::MemoryMapped => Ok(()),
+            PublishDurability::Async => self.flush_async(),
+            PublishDurability::Durable => self.flush(),
+        }
+    }
+
+    /// Wait until dirty pages for every configured slice are durable.
+    pub fn flush(&mut self) -> Result<()> {
+        for (node, published) in &mut self.nodes {
+            published
+                .writer
                 .flush()
                 .with_context(|| format!("failed publishing node {node}"))?;
+        }
+        Ok(())
+    }
+
+    /// Initiate asynchronous page flushes for every configured slice.
+    pub fn flush_async(&mut self) -> Result<()> {
+        for (node, published) in &mut self.nodes {
+            published
+                .writer
+                .flush_async()
+                .with_context(|| format!("failed scheduling publication for node {node}"))?;
         }
         Ok(())
     }
@@ -170,7 +253,7 @@ mod tests {
     use hypercube_slice::F64SliceReader;
 
     use super::*;
-    use crate::{CellValue, ExecutionMode, NodeStatus, Snapshot};
+    use crate::{CellValue, ExecutionMode, NodeStatus, PublishDurability, Snapshot};
 
     #[test]
     fn publishes_aligned_node_vectors() {
@@ -180,36 +263,40 @@ mod tests {
         let mut publisher =
             SlicePublisher::create(temp.path(), "demo-v1", &entities, &nodes).unwrap();
         publisher
-            .publish(&Snapshot {
-                generation: 1,
-                observed_at_ms: 10,
-                mode: ExecutionMode::Live,
-                entity_count: 2,
-                values: vec![
-                    CellValue {
+            .publish_with_durability(
+                &Snapshot {
+                    generation: 1,
+                    observed_at_ms: 10,
+                    mode: ExecutionMode::Live,
+                    entity_count: 2,
+                    values: vec![
+                        CellValue {
+                            node: "signal".to_owned(),
+                            key: "A".to_owned(),
+                            value: 1.5,
+                            observed_at_ms: 10,
+                        },
+                        CellValue {
+                            node: "signal".to_owned(),
+                            key: "B".to_owned(),
+                            value: -0.5,
+                            observed_at_ms: 10,
+                        },
+                    ],
+                    statuses: vec![NodeStatus {
                         node: "signal".to_owned(),
-                        key: "A".to_owned(),
-                        value: 1.5,
-                        observed_at_ms: 10,
-                    },
-                    CellValue {
-                        node: "signal".to_owned(),
-                        key: "B".to_owned(),
-                        value: -0.5,
-                        observed_at_ms: 10,
-                    },
-                ],
-                statuses: vec![NodeStatus {
-                    node: "signal".to_owned(),
-                    values: 2,
-                    missing: 0,
-                    compute_micros: 1,
-                }],
-            })
+                        values: 2,
+                        missing: 0,
+                        compute_micros: 1,
+                    }],
+                },
+                PublishDurability::MemoryMapped,
+            )
             .unwrap();
 
         let reader = F64SliceReader::open(temp.path().join("slices/signal.slice")).unwrap();
         assert_eq!(reader.snapshot_vec().unwrap(), vec![1.5, -0.5]);
+        publisher.flush_async().unwrap();
         assert!(SlicePublisher::create(temp.path(), "demo-v1", &entities, &nodes).is_err());
     }
 }

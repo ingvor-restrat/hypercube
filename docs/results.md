@@ -1,33 +1,43 @@
 # Reproducible Results
 
-These functional results were recorded for Hypercube 0.1.0 on 30 July 2026.
-They validate behavior and packaging; they are not performance benchmarks.
+These results were recorded from Hypercube `main` on 2 August 2026. Functional
+checks validate behavior and packaging. The separate Criterion section is a
+scoped development-host benchmark, not a production latency claim.
 
 ## Test suite
 
 ```bash
 cargo test --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
+cargo +1.81.0 test --workspace --all-targets
 ```
 
 Result:
 
 | Suite | Tests | Result |
 | --- | ---: | --- |
-| engine, publisher, and synthetic injectors | 6 | passed |
+| engine, publisher, and synthetic injectors | 7 | passed |
+| fixed-capacity rolling moments | 6 | passed |
 | ETF and pairs example invariants | 2 | passed |
-| slice layout, catalog, mmap, records, and vector algebra | 7 | passed |
+| slice layout, catalog, mmap, records, and vector algebra | 8 | passed |
 | circuit, triggers, recording, digest, and replay | 14 | passed |
-| **Total** | **29** | **passed** |
+| **Total** | **37** | **passed** |
 
 The suite includes dependency-cycle rejection, stale-generation rejection,
-tie-aware ranking, deterministic generic and OU market injection, long-only
-ETF basket weights, reconstruction of the declared pair residual, aligned
-publication, layout mismatch rejection, live heartbeat observation,
+stable-graph plan reuse, tie-aware ranking, deterministic generic and OU market
+injection, long-only ETF basket weights, reconstruction of the declared pair
+residual, rolling-moment agreement with corrected two-pass windows,
+no-look-ahead scoring, large-offset and sub-epsilon variance retention, aligned
+memory-only publication, deterministic bounded top-k selection, layout
+mismatch rejection, live heartbeat observation,
 quote/trade/TAQ records, guarded dot products, ordered Disruptor processing,
 persistent and hysteretic trigger transitions, missing-data invalidation,
 recording validation, non-finite input rejection, exact floating-point JSON
 round trips, semantic divergence detection, and fresh-state replay.
+
+The complete all-target suite, including the benchmark smoke harness, also
+passes with `rustc 1.81.0`; benchmark-only dependency versions are pinned so
+the workspace's declared minimum remains reproducible.
 
 ## Documentation contract
 
@@ -38,6 +48,36 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 All three crates build their complete public API documentation without
 warnings. Missing public documentation is enabled at the crate level, and CI
 promotes warnings to errors for the documentation build.
+
+## Performance benchmark
+
+The committed statistics-driven harness is:
+
+```bash
+cargo bench -p hypercube-engine --bench performance
+```
+
+Criterion 0.7 preserves the workspace's Rust 1.81 minimum. The following are
+central estimates from 30 samples after a one-second warmup and a three-second
+measurement target. Before/after lanes used the same benchmark source and
+Criterion version.
+
+| Benchmark | Before / reference | Current | Result |
+| --- | ---: | ---: | ---: |
+| stable graph, 128 entities | 106.18 µs | 96.99 µs | 8.55% lower latency |
+| stable graph, 1,024 entities | 998.31 µs | 888.30 µs | 11.59% lower latency |
+| durable five-slice publish, 128 entities | 3.308 ms | 3.314 ms | no significant change |
+| durable five-slice publish, 1,024 entities | 9.071 ms | 3.494 ms | 62.08% lower latency |
+| memory-mapped five-slice publish, 1,024 entities | — | 109.04 µs | 46.96 million cells/s |
+| rolling z-score, allocating two-pass | 156.43 µs | 44.53 µs online | 3.51× |
+| top 10 of 16,384 values, full sort | 296.92 µs | 47.92 µs select | 6.20× |
+
+Host: AMD Ryzen Threadripper PRO 7985WX, Linux 6.8.0-136-generic,
+Rust 1.97.1 / LLVM 22.1.6, standard bench profile, no native-CPU or explicit
+SIMD flags. The host was not isolated, core-pinned, or frequency-locked. See
+the [performance and stat-arb audit](performance.md) for methodology,
+confidence limits, Imperial HFT comparisons, semantic caveats, and the
+visibility-versus-durability distinction.
 
 ## Record/replay smoke run
 
@@ -94,6 +134,10 @@ Each `f64` slice was 320 bytes: a 256-byte versioned header plus eight
 eight-byte values. The catalog exposed the same five node names and the layout
 reported eight stable entities.
 
+The live server uses mapped-memory visibility and does not synchronously flush
+every generation. Its epoch makes each individual slice visible coherently;
+recovery truth and multi-slice atomicity remain separate responsibilities.
+
 ## Financial terminal examples
 
 Commands:
@@ -111,7 +155,8 @@ cargo run -q -p hypercube-engine --example pairs -- \
 The ETF frame used 160 constituents to value 12 baskets. Its five-node graph
 emitted 60 ETF-aligned cells and ranked premiums to basket value. The pairs
 frame used 24 pair entities; its five-node graph emitted 120 cells and ranked
-the absolute standardized cointegrating residuals.
+the absolute cointegrating residuals standardized against the preceding 20
+observations.
 
 The two committed [terminal recordings](markup/README.md) extend their recorded
 seeds to 28 generations. They are functional examples, not evidence of

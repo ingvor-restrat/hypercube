@@ -146,7 +146,9 @@ assert!(snapshot.value("score", "B").unwrap() > 0.0);
 Node order is not execution order. Hypercube resolves dependencies
 topologically, rejects missing required inputs and cycles, handles missing
 entity values explicitly, and produces a deterministic snapshot for each
-strictly increasing generation.
+strictly increasing generation. An unchanged node declaration reuses its
+compiled execution plan across generations; `graph_compilations()` exposes
+unexpected topology churn.
 
 ## Slice API
 
@@ -166,7 +168,35 @@ assert_eq!(reader.snapshot_vec()?, vec![1.0, 2.0]);
 
 Slice also provides fixed-record quote, trade, and quote-at-trade payloads for
 the first financial adapter, plus layout/catalog validation, guarded point
-reads, stable vector snapshots, sums, dot products, and top-absolute scans.
+reads, stable vector snapshots, sums, dot products, and bounded top-absolute
+selection.
+
+`SlicePublisher::publish()` retains its synchronous durability barrier.
+Low-latency current-state views can explicitly choose memory-mapped visibility
+or asynchronous flush through `PublishDurability`; those weaker policies do
+not claim disk durability.
+
+## Performance and stat-arb audit
+
+The engine includes a fixed-capacity `RollingMoments` primitive for explicit
+state owners such as simulations and circuit callbacks. The pairs monitor uses
+it to score each cointegrating residual against the preceding 20 observations,
+without using the current residual to estimate its own mean and variance.
+
+The [performance and statistical-arbitrage audit](docs/performance.md)
+cross-checks Hypercube against the Imperial HFT design-pattern and pairs
+benchmarks, records which techniques transferred, and publishes reproducible
+Criterion results. Run the committed harness with:
+
+```bash
+cargo bench -p hypercube-engine --bench performance
+```
+
+On the documented development host, execution-plan reuse reduced stable-graph
+latency by 8.55–11.59%, indexed publication reduced the 1,024-entity durable
+case by 62.08%, constant-time rolling moments were 3.51× faster than an
+allocating two-pass window, and bounded top-10 selection was 6.20× faster than
+a full sort. These are scoped microbenchmarks, not production latency claims.
 
 ## Repository layout
 
@@ -189,10 +219,11 @@ notes.
 
 Slice format version 1 is little-endian and designed for one writer with many
 readers. Recording format version 1 captures complete Hypercube updates and
-deterministic threshold-trigger state and transitions. Multi-slice atomic
-generations, cross-language ABI fixtures, replication, raw-feed generation
-assembly, Aeron Archive adapters, checkpoints, and general stateful function
-cells remain future work.
+deterministic threshold-trigger state and transitions. Rolling statistics are
+an explicit reusable state primitive, not an implicit graph cell. Multi-slice
+atomic generations, cross-language ABI fixtures, replication, raw-feed
+generation assembly, Aeron Archive adapters, checkpoints, and general stateful
+function cells remain future work.
 
 Continue with the
 [guided tour](docs/guide.md),
@@ -200,6 +231,8 @@ the
 [live-example walkthrough](docs/markup/README.md),
 the
 [architecture boundary](docs/architecture.md),
+the
+[performance and stat-arb audit](docs/performance.md),
 the
 [slice format](docs/slice-format.md),
 the
