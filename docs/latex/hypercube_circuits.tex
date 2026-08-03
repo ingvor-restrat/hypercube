@@ -12,6 +12,7 @@
 \usepackage{booktabs}
 \usepackage{array}
 \usepackage{tabularx}
+\usepackage{enumitem}
 \usepackage{xcolor}
 \usepackage{graphicx}
 \usepackage{float}
@@ -32,6 +33,11 @@
 
 \setlength{\parindent}{0pt}
 \setlength{\parskip}{0.52em}
+\widowpenalty=10000
+\clubpenalty=10000
+\displaywidowpenalty=10000
+\setlist[itemize]{itemsep=1pt,parsep=0pt,partopsep=0pt,topsep=0.28em}
+\setlist[enumerate]{itemsep=1pt,parsep=0pt,partopsep=0pt,topsep=0.28em}
 
 \lstdefinestyle{circuit}{
   basicstyle=\ttfamily\footnotesize,
@@ -145,6 +151,7 @@ That lifecycle requires state across generations.  The circuit runs after
 Hypercube completes a generation, retains the qualifying count and active
 state for each entity, and reports only genuine state changes.
 
+\clearpage
 \subsection{Programs in the repository}
 
 The repository contains four runnable examples \cite{repository}:
@@ -549,6 +556,7 @@ This distinction supports two workflows:
         or model and analyze the resulting divergence.
 \end{itemize}
 
+\clearpage
 \subsection{Disable external effects during replay}
 
 Replay data must not reach an adapter that can send an order, notification,
@@ -858,6 +866,7 @@ counterfactual command would accept a different graph or trigger
 configuration, mark the run as non-exact, and report the first generation
 whose values or transitions changed.
 
+\clearpage
 \subsection{Current limits}
 
 The current code covers one complete calculation-and-replay path:
@@ -914,6 +923,7 @@ Publishing callback state to \SLICE{} is the next practical addition.  Aeron
 transport, raw-feed reconstruction, checkpoints, circuit benchmarks, and
 execution remain future work.
 
+\clearpage
 \begin{thebibliography}{9}
 
 \bibitem{partone}

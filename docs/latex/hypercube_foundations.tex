@@ -12,6 +12,8 @@
 \usepackage{booktabs}
 \usepackage{array}
 \usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{needspace}
 \usepackage{xcolor}
 \usepackage{graphicx}
 \usepackage{float}
@@ -32,6 +34,11 @@
 
 \setlength{\parindent}{0pt}
 \setlength{\parskip}{0.52em}
+\widowpenalty=10000
+\clubpenalty=10000
+\displaywidowpenalty=10000
+\setlist[itemize]{itemsep=1pt,parsep=0pt,partopsep=0pt,topsep=0.28em}
+\setlist[enumerate]{itemsep=1pt,parsep=0pt,partopsep=0pt,topsep=0.28em}
 
 \lstdefinestyle{slice}{
   basicstyle=\ttfamily\footnotesize,
@@ -135,6 +142,7 @@ maintenance, and normalization.  If every calculation first queries a durable
 database, the database becomes part of the latency and availability path even
 when the working set is only a few megabytes of current vectors.
 
+\Needspace{8\baselineskip}
 The distinction is temporal rather than ideological:
 \begin{itemize}
   \item an event log answers what happened and in what order;
@@ -194,6 +202,7 @@ enough for Rust today and C++ or Python readers later.  A richer type system,
 distributed replication, global multi-slice generations, and effectful
 actions are evolution points, not implicit properties of the current files.
 
+\clearpage
 \section{Related work and scope}
 
 Memory mapping is the operating-system foundation.  POSIX specifies a mapping
@@ -236,6 +245,7 @@ cells: a declared dependency graph, logical time, deterministic propagation,
 and controlled state are preferable to hidden callbacks attached to mutable
 memory.
 
+\clearpage
 \part{Memory and Cube Model}
 
 \section{Stable entity layout}
@@ -540,6 +550,7 @@ loop.  The system can use smaller shards, longer immutable generations, a
 copied snapshot, or a stale-but-declared generation according to the
 consumer's consistency class.
 
+\clearpage
 \part{Hypercube Execution}
 
 \section{Runtime contract}
@@ -856,12 +867,13 @@ explicit effect boundary.
 
 \section{Noise-aware statistical-arbitrage selection study}
 
-The runnable pairs monitor does not use ML.  A separate checked-in research
-harness asks a narrower downstream question: after a residual, trade side, and
-candidate event have been declared causally, can a fitted model improve the
-accept-or-reject decision?  This preserves rolling \(z\) as the control policy
-and prevents a model from receiving credit merely for inventing a different
-economic trade.
+The runnable pairs monitor forms its signal by comparing the current residual
+with the preceding 20 observations.  Our research harness begins with that same
+signal and the same mean-reversion trade direction, then gives a fitted model
+one job: rank the candidate trades and decide which ones are worth taking.  By
+defining the economic trade before the model sees it, we can compare every
+model with the rolling \(z\)-score policy and attribute any improvement to
+better selection rather than to a change in strategy.
 
 For candidate time \(t\), let
 \[
@@ -881,69 +893,93 @@ The triple-barrier target uses profit barrier \(b_+=0.75\), stop barrier
   \tau_+=\inf\{h\in[1,H]:g_t(h)\ge b_+\},\qquad
   \tau_-=\inf\{h\in[1,H]:g_t(h)\le-b_-\}.
 \]
-An empty infimum is treated as infinity.
-The first touch gives class \(+1\) or \(-1\); no touch before \(H\) gives class
-zero.  The regression target retains economic magnitude at the same exit:
+When a barrier remains untouched, its first-touch time falls beyond the trading
+horizon.  The profit barrier therefore produces class \(+1\), the stop barrier
+produces class \(-1\), and a trade that reaches the end of the horizon produces
+class zero.  Using the same exit, we also retain the realized return as a
+continuous target:
 \[
   r_t=g_t\!\left(\min(\tau_+,\tau_-,H)\right)-c.
 \]
-Thus triple barrier is naturally a three-class problem, but it is not
-necessarily the best target.  Classification discards within-class overshoot
-and the variable vertical-barrier return; direct regression retains both
-\cite{lopezdeprado}.
+The three labels make triple barrier a natural classification problem, although
+the label records only which exit occurred.  The continuous target preserves
+the size of any overshoot and the variable return earned when time expires,
+giving the regression models economic information that the classifier cannot
+recover from the class label alone \cite{lopezdeprado}.
 
-The temporal protocol separates five roles:
+The study moves forward through five consecutive periods so that every modeling
+choice is made before the final results are observed:
 \[
 \text{fit}\rightarrow\text{validation}\rightarrow
 \text{predictive calibration}\rightarrow\text{policy selection}
 \rightarrow\text{untouched test}.
 \]
-A complete \(H\)-observation purge gap lies between every adjacent block.
-Validation controls boosting iterations.  The calibration block supplies a
-point-prediction intercept correction, marginal quantile corrections, or
-sigmoid class-probability calibration.  A later selection block chooses the
-minimum accepted model score.  The final block is not used by any of those
-operations.  Positions cannot overlap within a pair.
+The fitting period estimates the trees, while the following validation period
+determines how many boosting iterations to use.  A third period then corrects
+systematic bias in point forecasts, quantile coverage, or class probabilities.
+Once those corrections have been fixed, the policy-selection period chooses
+the lowest score at which the strategy will accept a trade, and the final test
+period measures that completed policy.
 
-LightGBM and CatBoost supply ordinary squared-error, Huber, quantile, and
-multiclass lanes \cite{lightgbm,catboost}.  Huber loss is quadratic near zero
-and linear in the tails, limiting an extreme target's influence
-\cite{huber}.  Quantile regression estimates conditional distribution points
-rather than a conditional mean \cite{quantileregression}.  For
-\(q\in\{0.2,0.5,0.8\}\), the calibration correction is
+We leave 12 observations between each period, matching the longest possible
+trade.  This gives every candidate opened in one period enough time to finish
+before data from the next period are used, which keeps its eventual outcome
+from leaking into a later modeling decision.  The simulation also waits for an
+open position in a pair to close before considering another trade in that pair.
+
+We compare LightGBM and CatBoost using ordinary squared-error, Huber, quantile,
+and multiclass objectives \cite{lightgbm,catboost}.  Ordinary regression aims
+at the conditional mean return, whereas Huber loss gradually changes from a
+quadratic penalty near zero to a linear penalty in the tails, reducing the
+influence of an extreme outcome \cite{huber}.  Quantile regression describes
+several points in the conditional return distribution instead of reducing that
+distribution to its mean \cite{quantileregression}.  For
+\(q\in\{0.2,0.5,0.8\}\), we measure the coverage error during the calibration
+period and apply the following fixed correction to later forecasts:
 \[
   \Delta_q=\operatorname{Quantile}_q(r-\widehat Q_q(x)),\qquad
   \widetilde Q_q(x)=\widehat Q_q(x)+\Delta_q.
 \]
-Outputs are sorted per observation to prevent crossing, and the frozen
-lower-tail utility is
+After applying this correction, we sort the three forecasts for each event so
+that the 20th percentile cannot exceed the median or the 80th percentile.  We
+then rank events with a score that discounts the median whenever the lower tail
+is wide:
 \[
   u_Q=\widetilde Q_{0.5}
       -0.25\bigl(\widetilde Q_{0.5}-\widetilde Q_{0.2}\bigr).
 \]
-A strict \(\widetilde Q_{0.2}>0\) rule accepts essentially no reference-test
-events because stop outcomes occupy more than one fifth of the distribution.
-The less absolute utility above permits uncertainty-aware ranking.
+Requiring the corrected 20th percentile to exceed zero would reject almost
+every event in the reference test because stop outcomes account for more than
+one fifth of the distribution.  The score above still responds to lower-tail
+risk while allowing the strategy to compare candidates rather than abstaining
+almost completely.
 
-Class-weighted three-way models receive an independent one-versus-rest sigmoid
-calibrator because a useful ranking score need not be a probability
-\cite{sklearncalibration}.  Their economic score restores payoff magnitude:
+Class weighting helps the three-way models learn the less frequent outcomes,
+but it also means that their raw scores should not be read directly as
+probabilities.  We therefore fit an independent one-versus-rest sigmoid
+calibrator \cite{sklearncalibration}, then convert the calibrated probabilities
+into expected net return:
 \[
   u_C(x)=\sum_{k\in\{-1,0,+1\}}
   P^{\mathrm{cal}}(Y=k\mid x)\,\bar r_k,
 \]
-where \(\bar r_k\) is estimated only in the calibration block.  On the
-reference seed, 20th, 50th, and 80th percentile test coverage is approximately
-0.18--0.20, 0.47--0.49, and 0.79--0.80; profit-class expected calibration
-error is about 0.03.  Calibration quality is necessary for probability-based
-decisions, but it does not guarantee superior event selection.
+Here \(\bar r_k\) is the average realized return for class \(k\), measured in
+the same calibration period.  On the reference seed, the 20th, 50th, and 80th
+percentile forecasts cover approximately 0.18--0.20, 0.47--0.49, and
+0.79--0.80 of the later test outcomes, while the expected calibration error for
+the profit class is about 0.03.  Those diagnostics show that the forecasts have
+sensible probabilistic meaning; trading performance still depends on whether
+they rank the economically attractive events ahead of the rest.
 
-The experiment contains a homogeneous Gaussian OU negative control and a
-positive control with observable volatility and persistence regimes.  Stressed
-positive-control states add unit-variance Student-\(t(4)\) idiosyncratic shocks;
-the true regime is withheld from the features.  Each reported lane comprises
-two expanding folds over 20 pairs and 3,300 observations, repeated for five
-deterministically derived seeds.
+We test the models in two synthetic settings.  The first is a homogeneous
+Gaussian Ornstein--Uhlenbeck process, where the rolling score already captures
+the useful structure and a more flexible model has little reason to improve on
+it.  The second moves among observable volatility and persistence conditions,
+with stressed periods adding unit-variance Student-\(t(4)\) shocks.  The models
+observe a noisy volatility measure but never receive the underlying regime
+itself.  Every reported result combines two expanding-window evaluations over
+20 pairs and 3,300 observations, and we repeat the complete experiment with
+five deterministically derived seeds.
 
 \begin{center}
 \small
@@ -970,16 +1006,20 @@ dependence-corrected significance test.}
 \label{fig:statarb-ml-robustness}
 \end{figure}
 
-The negative control favors the simple policy on average.  In the constructed
-observable stress, both Huber lanes beat it in all five seeds.  This validates
-the conditional-filter hypothesis and the harness, not market profitability.
-The next evidentiary step is a frozen protocol on survivorship-controlled
-market data with hedge parameters estimated inside each fold, bid/ask
-execution, borrow, asynchronous-leg risk, portfolio constraints, and clustered
-or block-bootstrap uncertainty.  The current models remain optional Python
-research artifacts; no ML dependency enters the Rust runtime.
+In the stationary setting, the simple rolling policy remains marginally better
+on average.  When volatility, persistence, and tail behavior change over time,
+both Huber models improve on it in all five runs, with CatBoost producing the
+largest average gain.  This result shows that the harness can detect useful
+conditional structure in a setting where we deliberately put such structure
+into the data; a claim about market profitability would require the same frozen
+protocol to survive a study of real, survivorship-controlled prices.  Such a
+study would estimate hedge parameters inside each historical fold and include
+bid/ask execution, borrow, asynchronous-leg risk, portfolio constraints, and
+clustered or block-bootstrap uncertainty.  For now, the fitted models live in
+the optional Python research workflow, while the Rust runtime continues to run
+the rolling statistical monitor.
 
-\section{Action boundary}
+\section{From analysis to controlled execution}
 
 A future trading adapter should accept an immutable intent:
 \[
@@ -1002,6 +1042,7 @@ dependency must not create an unbounded accidental feedback loop.  Stateful
 control policies need explicit cycle semantics, rate limits, and termination
 conditions.
 
+\clearpage
 \part{Implementation and Evidence}
 
 \section{Current implementation}
@@ -1182,8 +1223,10 @@ passes under the declared minimum compiler, Rust 1.81.0.
 
 Foreign-language byte fixtures, high-contention stress, interrupted writers,
 cross-process x86-64 and aarch64 evidence, immutable generation pinning, and
-crash recovery remain conformance work.  Performance reports should state
-entity count, slice count, update
+crash recovery remain conformance work.
+
+\Needspace{6\baselineskip}
+Performance reports should state entity count, slice count, update
 distribution, writer rate, reader count, operation, page residency, CPU
 architecture, flush policy, and percentile methodology.  Useful
 measurements include point-read latency, stable-vector latency, retries per
@@ -1240,6 +1283,7 @@ stages:
         connection to live execution.
 \end{enumerate}
 
+\Needspace{6\baselineskip}
 Each stage should be useful independently.  A community member may only need a
 fast stable-layout shared vector, a factor researcher may use the replay/live
 hypercube contract, and a systems researcher may focus on multi-slice
@@ -1276,6 +1320,7 @@ read repeatedly at low cost.  The open-source work is to make its guarantees
 portable, its generation semantics complete, its benchmarks representative
 across deployment classes, and its function boundary explicit.
 
+\clearpage
 \begin{thebibliography}{22}
 
 \bibitem{posixmmap}

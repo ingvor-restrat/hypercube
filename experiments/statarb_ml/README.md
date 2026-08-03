@@ -1,26 +1,26 @@
 # Leakage-controlled stat-arb ML study
 
-This experiment asks a narrow question: once a pairs strategy has declared a
-causal mean-reversion trade, can tabular ML improve the decision to accept or
-reject that event?
+This experiment starts with a pairs strategy that has already identified a
+causal mean-reversion trade, then measures whether tabular ML can make a better
+accept-or-reject decision than the rolling z-score alone. In the homogeneous
+stationary control, the simple policy remains best on average; when the
+synthetic process moves through observable volatility regimes, persistence
+shifts, and heavy-tailed shocks, robust point regression improves the baseline
+across all five deterministic seeds. The result confirms that the harness can
+detect useful conditional information when it is present in the data, while a
+market-profitability claim would require the same protocol to succeed on real
+prices and costs.
 
-The answer is conditional. In the homogeneous stationary control, the simple
-rolling-z policy remains the best average policy. In a synthetic positive
-control with observable volatility regimes, persistence shifts, and
-heavy-tailed shocks, robust point regression improves the rolling-z baseline
-across all five deterministic seeds. That establishes that the harness can
-detect useful conditional information; it does **not** establish that the same
-information or profitability exists in market data.
-
-The experiment is Python-only research tooling. It adds no Python or ML
-dependency to Hypercube's Rust live path.
+The Python research harness sits alongside the live Rust path, which continues
+to run with its existing dependencies and rolling statistical signal.
 
 ## Result first
 
-The table reports five complete, independently generated two-fold studies.
-The t-statistic is calculated over normalized net trade returns and is only a
-descriptive comparison metric; it is not an annualized Sharpe ratio and does
-not correct for cross-pair dependence.
+The table combines five independently generated studies, each evaluated over
+two expanding historical windows. Its t-statistic describes normalized net
+trade returns and provides a consistent comparison across policies; an
+annualized Sharpe calculation or a formal significance test would also have to
+account for capital allocation and dependence among pairs.
 
 | Scenario | Policy | Mean trade t-stat | Delta vs rolling-z | Seed wins | Mean total-net delta |
 | --- | --- | ---: | ---: | ---: | ---: |
@@ -30,35 +30,33 @@ not correct for cross-pair dependence.
 | regime switching | CatBoost Huber | **7.290** | **+0.664** | **5/5** | **+48.176** |
 | regime switching | LightGBM Huber | 7.181 | +0.555 | 5/5 | +32.926 |
 
-The strongest conclusion is not that CatBoost always wins. It is that robust
-regression helps when the data-generating process contains observable
-conditional structure, while extra model capacity does not create incremental
-value in the stationary control. Quantile and three-class models remain useful
-for uncertainty and probability reporting, but neither was the best selection
-policy here.
+The useful conclusion concerns the loss function rather than a permanent
+ranking of libraries: robust regression helps when observable conditions alter
+the distribution of returns, while extra model capacity adds no incremental
+value in the stationary control. Quantile and three-class models still provide
+useful uncertainty and probability estimates, although the Huber models select
+trades more effectively in this experiment.
 
 ![Five-seed robustness result](results/statarb_ml_robustness.png)
 
 The detailed reference-seed paths, fold metrics, calibration diagnostics, and
 machine-readable manifests are in [`results/`](results/).
 
-## Is ML used in the current pairs example?
+## How ML fits around the current pairs example
 
-No. The Rust `pairs` monitor uses a declared AR(1) residual process and a
-fixed-capacity rolling estimator. It scores the current residual against the
-previous 20 residuals before inserting the current observation. That is a
-causal statistical monitor, not a fitted trading model.
-
-ML enters this study one layer later. The economic hypothesis and side remain
-fixed: a sufficiently large residual is traded toward its prior mean. A model
-only ranks or rejects candidate events using information available at the
-decision time. Keeping those responsibilities separate makes it possible to
-measure whether ML adds anything beyond the z-score.
+The Rust `pairs` monitor uses a declared AR(1) residual process and a
+fixed-capacity rolling estimator, scoring each residual against the previous 20
+observations before adding it to the window. The research harness keeps that
+causal signal and its implied mean-reversion direction, then introduces ML at
+the selection stage, where a model ranks or rejects candidates using the
+information available at decision time. This separation lets the experiment
+measure the value added by selection without allowing the model to redefine the
+underlying trade.
 
 ## What “calibration” means here
 
-Several different operations are often called calibration. They should not
-share data or be treated as interchangeable.
+The word *calibration* covers several operations in this study, each performed
+at a different point in time and with a distinct purpose.
 
 | Layer | Purpose | This study |
 | --- | --- | --- |
@@ -69,23 +67,27 @@ share data or be treated as interchangeable.
 | Policy calibration | Choose the minimum score at which a trade is accepted. | A separate selection block with a minimum trade count. |
 | Evaluation | Measure the frozen pipeline. | An untouched test block. |
 
-Every adjacent block is separated by a full 12-observation label horizon. The
-five-stage order is therefore
+The observations are divided chronologically as follows:
 
 ```text
 fit -> gap -> validation -> gap -> calibration -> gap -> selection -> gap -> test
 ```
 
-No position may overlap another position in the same pair. Positions in
-different pairs may overlap, which is one reason the reported trade t-statistic
-must not be interpreted as a formal portfolio significance test.
+Because a trade can remain open for 12 observations, we leave that much time
+between one stage and the next, allowing every earlier outcome to become known
+before later data influence the model. Within a pair, the experiment also waits
+for an open position to finish before considering another candidate. Trades in
+different pairs can overlap, so a formal portfolio significance test would need
+to model their dependence explicitly.
 
-Policy selection evaluates the fixed score quantiles 0%, 20%, 40%, 60%, 75%,
-85%, and 90%. It maximizes selection-block trade-return t-statistic, then total
-net return and trade count as deterministic tie-breaks, subject to at least 30
-trades. Model scores must be nonnegative; rolling-z must also remain above the
-original candidate threshold of 1.0. This small declared grid constrains, but
-does not eliminate, threshold-selection variance.
+During policy selection, the experiment tries score thresholds at the 0th,
+20th, 40th, 60th, 75th, 85th, and 90th percentiles, requiring at least 30
+accepted trades. It first chooses the threshold with the highest trade-return
+t-statistic, then uses total net return and trade count to settle ties
+deterministically. Model scores must remain nonnegative, and rolling-z retains
+its original candidate threshold of 1.0. Declaring this small grid in advance
+limits the opportunity to tune the policy to one historical period, although
+some threshold-selection variance inevitably remains.
 
 ## Causal residual and candidate event
 
@@ -102,8 +104,9 @@ candidate score is
 z_{j,t}=\frac{e_{j,t}-\mu(W_{j,t})}{\sigma(W_{j,t})}.
 \]
 
-The current residual is not part of its own center or scale. An event becomes
-a candidate when \(|z_{j,t}|\ge 1\), and its fixed side is
+The estimation window ends at \(t-1\), so the current residual contributes to
+neither its center nor its scale. An event becomes a candidate when
+\(|z_{j,t}|\ge 1\), and its fixed side is
 \(s_{j,t}=-\operatorname{sign}(z_{j,t})\). Features contain the current
 causal z-score, one/three/ten-step residual changes, a 5-to-20-step volatility
 ratio, a trailing AR(1) estimate and half-life, and an observable market
@@ -112,7 +115,7 @@ not features.
 
 ## Triple barrier as a three-way target
 
-Yes: triple barrier naturally creates a three-class first-touch problem. For
+Triple barrier turns each candidate into a three-class first-touch problem. For
 future offset \(h\), define normalized gross trade return
 
 \[
@@ -144,18 +147,19 @@ r_{j,t}=g_{j,t}(\min(\tau_+,\tau_-,H))-c,
 \qquad c=0.08.
 \]
 
-This distinction matters. A classifier estimates which boundary is reached;
-a regressor estimates economic return. Classification discards within-class
-overshoot and the variable vertical-barrier payoff, so the calibrated class
-probabilities are converted back to expected net return using class-conditional
-payoffs estimated only on the calibration block.
+The classifier estimates which exit occurs, whereas the regressor estimates the
+economic return earned at that exit. Since the class label omits within-class
+overshoot and the variable payoff at the end of the horizon, we convert the
+calibrated class probabilities back into expected net return using
+class-conditional payoffs measured during calibration.
 
 ## Models and their calibration
 
 ### Point regression
 
-LightGBM L2 and CatBoost RMSE estimate a conditional mean-like return. Their
-calibration-block mean residual supplies one frozen intercept correction:
+LightGBM L2 and CatBoost RMSE estimate a conditional mean-like return. We
+measure their average forecast error during calibration and carry that single,
+fixed intercept correction into the later periods:
 
 \[
 \delta=\operatorname{mean}(r-\hat r),\qquad
@@ -169,9 +173,10 @@ positive-control seeds.
 
 ### Quantile regression
 
-LightGBM fits separate 20th, 50th, and 80th percentile models. CatBoost fits
-the same three outputs jointly with `MultiQuantile`. For each quantile \(q\),
-a split marginal correction is learned on the calibration block:
+LightGBM fits separate 20th, 50th, and 80th percentile models, while CatBoost
+fits the same three outputs jointly with `MultiQuantile`. For each quantile
+\(q\), we compare the forecast with the calibration-period outcomes and learn
+the following marginal correction:
 
 \[
 \Delta_q=\operatorname{Quantile}_q(r-\widehat Q_q(x)),\qquad
@@ -186,17 +191,19 @@ u_Q=\widetilde Q_{0.50}
  -0.25\bigl(\widetilde Q_{0.50}-\widetilde Q_{0.20}\bigr).
 \]
 
-A strict rule requiring \(\widetilde Q_{0.20}>0\) is not useful for this
-barrier geometry: in the reference tests, it accepts essentially no events.
-The calibrated test coverages remain close to their targets: roughly
+A strict rule requiring \(\widetilde Q_{0.20}>0\) accepts almost no events with
+this barrier geometry, because more than one fifth of the reference outcomes
+reach the stop. The calibrated test coverages remain close to their targets:
+roughly
 0.18–0.20, 0.47–0.49, and 0.79–0.80 for the three quantiles.
 
 ### Three-class barrier classifier
 
-LightGBM and CatBoost fit stop/vertical/profit classes with training-only
-class weights. Because weighted classifiers should not be trusted as
-probability estimators directly, an independent calibration block fits
-one-vs-rest sigmoid calibrators. The economic score is
+LightGBM and CatBoost fit the stop, vertical, and profit outcomes with class
+weights derived from the training data. Weighting improves attention to
+infrequent outcomes but distorts the raw scores as probability estimates, so we
+fit one-vs-rest sigmoid calibrators on the later calibration period. The
+economic score is
 
 \[
 u_C(x)=\sum_{k\in\{-1,0,+1\}}
@@ -204,27 +211,28 @@ P^{\mathrm{cal}}(y=k\mid x)\,\bar r_k,
 \]
 
 where \(\bar r_k\) is the calibration-block mean net payoff for class \(k\).
-Reference-seed expected calibration error for the profit class is about
-0.03 on untouched tests. Good probability calibration did not, by itself,
-make the classifier a better trade selector.
+On the untouched reference tests, expected calibration error for the profit
+class is about 0.03. The probabilities therefore have a useful interpretation,
+although the classifier still ranks profitable trades less effectively than the
+best Huber model.
 
 ## LightGBM or CatBoost?
 
-Both are current, capable choices; the target and validation design matter
-more than the logo.
+Both libraries provide L2, Huber, quantile, and multiclass objectives, making
+LightGBM a straightforward fast baseline and CatBoost an equally credible
+alternative with strong categorical handling. Their main difference for this
+study lies in quantile training: LightGBM produces independently trainable
+models, while CatBoost can estimate the three quantiles together with its
+`MultiQuantile` loss, which the current official support table lists as
+CPU-only.
 
-- LightGBM offers L2, Huber, quantile, and multiclass objectives and is a
-  straightforward fast baseline. Separate quantile models can be trained or
-  served independently.
-- CatBoost offers the same broad families plus a joint `MultiQuantile` loss
-  and strong native categorical handling. Its joint multi-quantile objective
-  is CPU-only in the current official support table.
-- CatBoost's `has_time=True` is used here so it preserves input order rather
-  than randomly permuting rows. This is useful, but it does not replace
-  chronological splits or horizon purging.
-- For this controlled stress, CatBoost Huber has the strongest replicated
-  selection result. That is evidence for this data-generating process, not a
-  universal library ranking.
+We run CatBoost with `has_time=True` so that it preserves the supplied temporal
+order instead of randomly permuting rows. Chronological evaluation and the
+12-observation gaps remain essential because ordering within the learner cannot
+prevent outcomes from leaking across data splits. CatBoost Huber produces the
+strongest replicated result under the controlled stress scenario, which makes
+it the leading candidate for the next experiment rather than a universal
+winner over LightGBM.
 
 Relevant upstream references are the
 [LightGBM objective documentation](https://lightgbm.readthedocs.io/en/stable/Parameters.html),
@@ -238,41 +246,37 @@ against leakage by itself.
 
 ## Where probabilistic Torch and graph models fit
 
-The protocol is model-agnostic. Volt's DeepSets or GraphNN can consume the same
-causal event contract when relationships across sets, paths, or graph
-neighborhoods carry information that a row-wise tree cannot represent. Keep
-the rolling-z lane and boosted-tree lanes as mandatory controls; a neural model
-should earn its additional data, serving, and checkpoint complexity.
+The protocol can also support Volt's DeepSets or GraphNN models whenever
+relationships across sets, paths, or graph neighborhoods carry information
+that a row-wise tree cannot represent. Rolling-z and the boosted-tree models
+should remain controls, giving a neural policy a clear benchmark against which
+to justify its additional data, serving, and checkpoint complexity.
 
-Probabilistic Torch is technically straightforward:
+In Torch, three logits followed by a softmax can represent the
+stop/vertical/profit outcome, while ordered heads trained with pinball loss can
+estimate conditional quantiles. A network can instead return a location and
+positive scale for a Gaussian or Student-t likelihood, and ensembles or dropout
+can add diagnostics for model uncertainty. Each approach still needs the later
+calibration period before its outputs are interpreted as reliable probabilities
+or used to select trades.
 
-- three logits plus softmax model the stop/vertical/profit target;
-- three ordered heads with pinball loss model conditional quantiles;
-- a location and positive scale can parameterize a Gaussian or Student-t
-  return likelihood; and
-- ensembles or dropout can supply epistemic diagnostics, though neither is
-  automatically a calibrated probability.
-
-The same independent calibration and selection blocks still apply. A neural
-checkpoint should include feature schema, normalization state, target/barrier
-definition, calibration map, selection threshold, library versions, and a
-content digest. In a production split, Rust can continue to own causal rolling
-features and the event pipeline while Python/Torch owns training; inference can
-move behind a versioned native boundary only after profiling shows that Python
-serving is material.
+A neural checkpoint should include the feature schema, normalization state,
+target and barrier definition, calibration mapping, selection threshold,
+library versions, and a content digest. A practical production arrangement
+would keep causal rolling features and event handling in Rust while Python and
+Torch handle training. Profiling can then show whether inference latency is
+large enough to justify a native implementation.
 
 ## Scenario design
 
-The study deliberately includes one negative and one positive control.
-
-- `stationary_ou` uses a homogeneous Gaussian mean-reverting residual law.
-  Extra features contain little incremental structure; ML should not win
-  merely by recreating the z-score.
-- `regime_switching` uses three persistence/volatility states. Stressed states
-  have unit-variance Student-t(4) idiosyncratic shocks, and the breakdown state
-  is mildly explosive. A noisy, causal volatility proxy is visible; the true
-  regime is retained only for diagnostics. This is constructed so a conditional
-  filter *can* help.
+The stationary control uses a homogeneous Gaussian mean-reverting residual law,
+leaving the additional features with little incremental structure beyond the
+z-score. The regime-switching control moves among three persistence and
+volatility states; stressed periods contain unit-variance Student-t(4) shocks,
+and the breakdown state becomes mildly explosive. Models observe a noisy,
+causal volatility proxy while the true regime remains available only for
+diagnostics, creating a setting in which a conditional filter has genuine
+information it can use.
 
 The positive-control transition matrix is
 
@@ -330,12 +334,13 @@ Committed artifacts:
 
 ## Recommended next experiment
 
-Do not replace the Rust z-score monitor with a Python model on the strength of
-this synthetic result. Freeze the same feature and label contract, estimate
-alpha/beta inside each fold, and run it over a survivorship-controlled market
-dataset with bid/ask execution, borrow, and pair-level clustered or block
-bootstrap uncertainty. Promote a model only if its improvement survives time,
-universe, cost, and calibration drift. The likely production shape is a small
-versioned model artifact behind the existing Rust candidate pipeline, with a
-rolling-z fallback and explicit abstention when features or calibration are
-stale.
+The synthetic study earns CatBoost Huber a place in the next comparison while
+leaving the Rust z-score monitor as the operational baseline. That comparison
+should freeze the same feature and label contract, estimate alpha and beta
+inside each fold, and use survivorship-controlled market data with bid/ask
+execution, borrow, and pair-level clustered or block-bootstrap uncertainty. A
+model would become a production candidate after its improvement survives
+changes in time, universe, costs, and calibration. The likely serving design is
+a small, versioned model artifact behind the existing Rust candidate pipeline,
+with rolling-z available as a fallback and explicit abstention whenever inputs
+or calibration become stale.

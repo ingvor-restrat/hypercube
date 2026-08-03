@@ -416,11 +416,20 @@
 }
 
 \newenvironment{SNcompactitem}
-  {\begin{itemize}[itemsep=0.08em,topsep=0.18em]}
+  {\begin{itemize}[itemsep=1pt,parsep=0pt,partopsep=0pt,topsep=0.28em]}
   {\end{itemize}}
 
 \newenvironment{SNcompactenum}
-  {\begin{enumerate}[itemsep=0.08em,topsep=0.18em]}
+  {\begin{enumerate}[itemsep=1pt,parsep=0pt,partopsep=0pt,topsep=0.28em]}
+  {\end{enumerate}}
+
+% Familiar aliases retained for papers that used the earlier StrategyNet names.
+\newenvironment{packeditems}
+  {\begin{itemize}[itemsep=1pt,parsep=0pt,partopsep=0pt,topsep=0.28em]}
+  {\end{itemize}}
+
+\newenvironment{packedenum}
+  {\begin{enumerate}[itemsep=1pt,parsep=0pt,partopsep=0pt,topsep=0.28em]}
   {\end{enumerate}}
 
 \endinput
