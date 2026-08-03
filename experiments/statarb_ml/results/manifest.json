@@ -1,0 +1,121 @@
+{
+  "config": {
+    "candidate_z": 1.0,
+    "feature_window": 60,
+    "horizon": 12,
+    "iterations": 350,
+    "min_selection_trades": 30,
+    "observations": 3300,
+    "pairs": 20,
+    "profit_barrier": 0.75,
+    "round_trip_cost": 0.08,
+    "seed": 335341,
+    "stop_barrier": 1.0,
+    "z_window": 20
+  },
+  "features": [
+    "z",
+    "abs_z",
+    "delta_1",
+    "delta_3",
+    "delta_10",
+    "vol_ratio_5_20",
+    "phi_hat",
+    "half_life_hat",
+    "market_vol"
+  ],
+  "folds": [
+    {
+      "calibration_end": 1944,
+      "calibration_start": 1774,
+      "fold": 1,
+      "selection_end": 2124,
+      "selection_start": 1956,
+      "test_end": 2586,
+      "test_start": 2136,
+      "train_end": 1400,
+      "validation_end": 1762,
+      "validation_start": 1412
+    },
+    {
+      "calibration_end": 2444,
+      "calibration_start": 2274,
+      "fold": 2,
+      "selection_end": 2624,
+      "selection_start": 2456,
+      "test_end": 3086,
+      "test_start": 2636,
+      "train_end": 1900,
+      "validation_end": 2262,
+      "validation_start": 1912
+    }
+  ],
+  "lanes": [
+    "rolling_z",
+    "lightgbm_point",
+    "catboost_point",
+    "lightgbm_huber",
+    "catboost_huber",
+    "lightgbm_quantile",
+    "catboost_quantile",
+    "lightgbm_barrier",
+    "catboost_barrier"
+  ],
+  "protocol": {
+    "block_order": [
+      "fit",
+      "early_stop_validation",
+      "predictive_calibration",
+      "policy_selection",
+      "untouched_test"
+    ],
+    "overlap_rule": "no overlapping positions within a pair",
+    "purge_gap_observations": 12,
+    "trade_metric": "descriptive t-statistic over normalized net trade returns"
+  },
+  "quantile_downside_penalty": 0.25,
+  "quantiles": [
+    0.2,
+    0.5,
+    0.8
+  ],
+  "scenario_design": {
+    "regime_switching": "observable volatility proxy, latent persistence states, and unit-variance Student-t(4) idiosyncratic shocks in stressed states",
+    "stationary_ou": "Gaussian homogeneous mean reversion negative control"
+  },
+  "scenarios": {
+    "regime_switching": {
+      "events": 32913,
+      "labels": {
+        "-1": 10038,
+        "0": 1934,
+        "1": 20941
+      },
+      "regime_frequency": {
+        "0": 0.6515358672864825,
+        "1": 0.2877282532737824,
+        "2": 0.06073587943973506
+      }
+    },
+    "stationary_ou": {
+      "events": 31931,
+      "labels": {
+        "-1": 8816,
+        "0": 842,
+        "1": 22273
+      },
+      "regime_frequency": {
+        "0": 1.0
+      }
+    }
+  },
+  "versions": {
+    "catboost": "1.2.5",
+    "lightgbm": "4.6.0",
+    "matplotlib": "3.10.6",
+    "numpy": "1.26.0",
+    "pandas": "2.2.1",
+    "python": "3.11.15",
+    "scikit_learn": "1.5.1"
+  }
+}

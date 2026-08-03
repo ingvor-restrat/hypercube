@@ -1,0 +1,21 @@
+{
+  "master_seed": 335341,
+  "quick": false,
+  "seed_derivation": "NumPy SeedSequence.spawn; master seed is also run zero",
+  "seeds": [
+    335341,
+    3141433057,
+    1328178339,
+    1031391267,
+    1601311424
+  ],
+  "versions": {
+    "catboost": "1.2.5",
+    "lightgbm": "4.6.0",
+    "matplotlib": "3.10.6",
+    "numpy": "1.26.0",
+    "pandas": "2.2.1",
+    "python": "3.11.15",
+    "scikit_learn": "1.5.1"
+  }
+}

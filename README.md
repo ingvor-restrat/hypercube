@@ -198,6 +198,16 @@ case by 62.08%, constant-time rolling moments were 3.51× faster than an
 allocating two-pass window, and bounded top-10 selection was 6.20× faster than
 a full sort. These are scoped microbenchmarks, not production latency claims.
 
+The separate [leakage-controlled stat-arb ML study](experiments/statarb_ml/README.md)
+compares rolling-z selection with LightGBM and CatBoost L2/RMSE, Huber,
+quantile, and calibrated three-class triple-barrier policies. Across five
+deterministic seeds, the stationary control favored the simple rule on
+average; in a synthetic observable regime-and-heavy-tail positive control,
+CatBoost Huber improved the descriptive trade-return t-statistic by 0.664 and
+mean normalized net return by 48.176, winning all five seed comparisons. The
+study is an optional Python research harness, not a Rust runtime dependency or
+a claim of market profitability.
+
 ## Repository layout
 
 ```text
@@ -205,6 +215,7 @@ crates/hypercube        `hypercube-engine` package, demo, and dashboard
 crates/hypercube-slice  memory-mapped vector format and readers/writers
 crates/hypercube-circuit stateful Disruptor callbacks and record/replay
 docs                    guides, terminal recording, papers, and format notes
+experiments             optional leakage-controlled research harnesses
 ```
 
 The initial extraction intentionally excludes private service configuration,
@@ -233,6 +244,8 @@ the
 [architecture boundary](docs/architecture.md),
 the
 [performance and stat-arb audit](docs/performance.md),
+the
+[stat-arb ML study](experiments/statarb_ml/README.md),
 the
 [slice format](docs/slice-format.md),
 the

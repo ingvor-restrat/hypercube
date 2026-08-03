@@ -151,6 +151,43 @@ sorts only the selected (k) entries. The prior full sort was
 (O(N\log N)); the new path is expected (O(N + k\log k)). Equal magnitudes
 remain deterministic by ascending slot.
 
+## Noise-aware stat-arb ML extension
+
+The rolling pairs monitor remains deliberately statistical and unfitted. A
+separate [research harness](../experiments/statarb_ml/README.md) now tests
+whether ML can add value *after* the residual, side, and candidate event have
+been declared. It compares rolling-z with LightGBM and CatBoost squared-error,
+Huber, quantile, and three-class triple-barrier policies.
+
+The protocol uses five ordered blocks—fit, early-stop validation, predictive
+calibration, policy selection, and untouched test—with a complete 12-step
+label-horizon gap between each. Point predictions receive a calibration-only
+bias correction; quantiles receive a split marginal coverage correction;
+weighted multiclass outputs receive independent sigmoid probability
+calibration. The selection threshold is chosen on a later block, not on the
+calibrator's own observations.
+
+Five deterministic seeds give the following controlled comparison. “Trade
+t-stat” is descriptive over normalized net event returns, not annualized
+Sharpe or a dependence-corrected significance result.
+
+| Scenario and lane | Mean trade t-stat | Delta vs rolling-z | Wins | Mean total-net delta |
+| --- | ---: | ---: | ---: | ---: |
+| stationary OU, rolling-z | 12.666 | — | — | — |
+| stationary OU, closest ML lane (LightGBM quantile) | 12.648 | -0.018 | 2/5 | -91.283 |
+| observable regime stress, rolling-z | 6.626 | — | — | — |
+| observable regime stress, CatBoost Huber | **7.290** | **+0.664** | **5/5** | **+48.176** |
+| observable regime stress, LightGBM Huber | 7.181 | +0.555 | 5/5 | +32.926 |
+
+The negative control prevents a boosted tree from receiving credit for merely
+reconstructing a z-score. The positive control contains observable persistence
+and volatility shifts plus Student-t shocks by construction; it establishes
+that the harness can detect incremental conditional information. Neither
+scenario is evidence of live profitability. The next required test is the
+same frozen protocol over survivorship-controlled market data with
+within-fold hedge estimation, bid/ask execution, borrow, and clustered or
+block-bootstrap uncertainty.
+
 ## Hypercube benchmark results
 
 The committed Criterion 0.7 harness runs with:

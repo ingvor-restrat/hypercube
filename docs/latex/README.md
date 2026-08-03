@@ -7,8 +7,9 @@
 original strips/hypercube paper. It uses the current names `Slice`,
 `hypercube-slice`, `hypercube-engine`, and the actual public Rust API. The
 August 2026 revision adds reusable graph planning, online rolling moments,
-publication durability policies, the Imperial HFT pattern audit, and measured
-Criterion results.
+publication durability policies, the Imperial HFT pattern audit, measured
+Criterion results, and the leakage-controlled point/Huber/quantile/
+triple-barrier stat-arb study.
 
 ## Callbacks, Triggers, and Replay
 

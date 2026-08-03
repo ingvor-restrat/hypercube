@@ -162,6 +162,38 @@ The two committed [terminal recordings](markup/README.md) extend their recorded
 seeds to 28 generations. They are functional examples, not evidence of
 executable arbitrage after costs.
 
+## Leakage-controlled stat-arb ML study
+
+Commands:
+
+```bash
+python3 -m unittest discover -s experiments/statarb_ml -p 'test_*.py' -v
+python3 experiments/statarb_ml/run.py
+python3 experiments/statarb_ml/robustness.py --count 5
+```
+
+All seven causal/protocol tests passed. The detailed reference study used 20
+pairs, 3,300 observations, two expanding folds, and distinct fit, validation,
+calibration, selection, and untouched-test blocks separated by the full
+12-observation label horizon. The robustness run repeated the complete study
+over five deterministically derived seeds.
+
+In the homogeneous stationary OU control, rolling-z had mean trade-return
+t-statistic 12.666; the closest ML lane, LightGBM quantile, measured 12.648 and
+produced 91.283 fewer normalized net-return units on average. In the synthetic
+observable regime/heavy-tail positive control, CatBoost Huber measured 7.290
+against rolling-z at 6.626, won all five seed comparisons, and added 48.176
+normalized net-return units on average. LightGBM Huber also won all five, with
+a +0.555 t-statistic delta and +32.926 mean total-net delta.
+
+Quantile coverage and profit-class probability calibration transferred well
+to the untouched reference tests, but calibration alone did not guarantee a
+better selection policy. Results, exact seeds, package versions, fold
+boundaries, plots, and caveats are committed under
+[`experiments/statarb_ml/results`](../experiments/statarb_ml/results/). These
+are normalized synthetic event results, not annualized Sharpe, formal
+significance, or executable-arbitrage evidence.
+
 ## Packaging
 
 `hypercube-slice` packages and verifies independently. `hypercube-engine`
