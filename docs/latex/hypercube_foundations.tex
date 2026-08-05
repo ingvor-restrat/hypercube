@@ -1,44 +1,11 @@
-\documentclass[11pt]{article}
+\documentclass{strategynet-journal}
 
-\usepackage[T1]{fontenc}
-\usepackage[utf8]{inputenc}
-\usepackage[english]{babel}
-\usepackage{mathpazo}
-\usepackage[scaled]{helvet}
-\usepackage{microtype}
-\usepackage[letterpaper,margin=0.88in]{geometry}
-\usepackage{amsmath}
-\usepackage{amssymb}
-\usepackage{booktabs}
-\usepackage{array}
-\usepackage{tabularx}
-\usepackage{enumitem}
-\usepackage{needspace}
-\usepackage{xcolor}
-\usepackage{graphicx}
-\usepackage{float}
-\usepackage{listings}
-\usepackage{tikz}
 \usetikzlibrary{arrows.meta,positioning}
-\usepackage{xurl}
-\usepackage{hyperref}
 
 \hypersetup{
   pdftitle={Hypercube Core: Memory-mapped real time factors},
-  pdfauthor={research@strategynet.ai},
-  colorlinks=true,
-  linkcolor=blue!50!black,
-  citecolor=blue!50!black,
-  urlcolor=blue!60!black
+  pdfauthor={research@strategynet.ai}
 }
-
-\setlength{\parindent}{0pt}
-\setlength{\parskip}{0.52em}
-\widowpenalty=10000
-\clubpenalty=10000
-\displaywidowpenalty=10000
-\setlist[itemize]{itemsep=1pt,parsep=0pt,partopsep=0pt,topsep=0.28em}
-\setlist[enumerate]{itemsep=1pt,parsep=0pt,partopsep=0pt,topsep=0.28em}
 
 \lstdefinestyle{slice}{
   basicstyle=\ttfamily\footnotesize,
@@ -96,8 +63,9 @@
   }
 }
 
+\SNHeader{strategynet.ai:Hypercube}
 \title{Hypercube: core memory-mapped real time factors}
-\author{research@strategynet.ai}
+\author{\href{mailto:research@strategynet.ai}{research@strategynet.ai}}
 \date{August 2026}
 
 \begin{document}
@@ -129,7 +97,11 @@ current release.  Although the examples use markets, the API also works for
 any stable set of entities.
 \end{abstract}
 
+\SNtwocolumntableofcontents
+
 \part{Motivation}
+
+\begin{SNcolumns}
 
 \section{From events to live analytical state}
 
@@ -202,8 +174,12 @@ enough for Rust today and C++ or Python readers later.  A richer type system,
 distributed replication, global multi-slice generations, and effectful
 actions are evolution points, not implicit properties of the current files.
 
+\end{SNcolumns}
+
 \clearpage
 \section{Related work and scope}
+
+\begin{SNcolumns}
 
 Memory mapping is the operating-system foundation.  POSIX specifies a mapping
 between a process address space and a file or shared-memory object and defines
@@ -245,10 +221,14 @@ cells: a declared dependency graph, logical time, deterministic propagation,
 and controlled state are preferable to hidden callbacks attached to mutable
 memory.
 
+\end{SNcolumns}
+
 \clearpage
 \part{Memory and Cube Model}
 
 \section{Stable entity layout}
+
+\begin{SNcolumns}
 
 Let a layout be
 \[
@@ -277,6 +257,8 @@ This separation matters because a domain registry and a numerical layout
 have different rates of change.  Venue, currency, multiplier, expiry, strike,
 and other rich metadata can live in keyed sidecars or services.  The layout
 keeps only the identity and stable dense index required by the shared vectors.
+
+\end{SNcolumns}
 
 \section{Slice as a published vector}
 
@@ -388,6 +370,8 @@ a freshness service level as a predicate, not an intuition:
 
 \part{Consistency and Publication}
 
+\begin{SNcolumns}
+
 \section{What ``nonlocking read'' means}
 
 The desired property is precise: a reader of an already mapped slice should
@@ -449,6 +433,8 @@ scope is limited:
   \item memory-order behavior must be validated on every supported
         architecture and foreign-language reader implementation.
 \end{itemize}
+
+\end{SNcolumns}
 
 \section{Consistency classes}
 
@@ -1233,6 +1219,8 @@ measurements include point-read latency, stable-vector latency, retries per
 accepted read, generation publish time, changed-shard bytes, and end-to-end
 input-to-node-to-publication latency.
 
+\begin{SNcolumns}
+
 \section{Limits}
 
 The current implementation establishes a credible vertical slice, not a
@@ -1319,6 +1307,8 @@ aligned multidimensional calculation model, and versioned outputs that can be
 read repeatedly at low cost.  The open-source work is to make its guarantees
 portable, its generation semantics complete, its benchmarks representative
 across deployment classes, and its function boundary explicit.
+
+\end{SNcolumns}
 
 \clearpage
 \begin{thebibliography}{22}

@@ -1,43 +1,11 @@
-\documentclass[8pt]{article}
+\documentclass{strategynet-journal}
 
-\usepackage[T1]{fontenc}
-\usepackage[utf8]{inputenc}
-\usepackage[english]{babel}
-\usepackage{mathpazo}
-\usepackage[scaled]{helvet}
-\usepackage{microtype}
-\usepackage[letterpaper,margin=0.88in]{geometry}
-\usepackage{amsmath}
-\usepackage{amssymb}
-\usepackage{booktabs}
-\usepackage{array}
-\usepackage{tabularx}
-\usepackage{enumitem}
-\usepackage{xcolor}
-\usepackage{graphicx}
-\usepackage{float}
-\usepackage{listings}
-\usepackage{tikz}
 \usetikzlibrary{arrows.meta,positioning}
-\usepackage{xurl}
-\usepackage{hyperref}
 
 \hypersetup{
   pdftitle={Hypercube: Callbacks, Triggers, and Replay},
-  pdfauthor={research@strategynet.ai},
-  colorlinks=true,
-  linkcolor=blue!50!black,
-  citecolor=blue!50!black,
-  urlcolor=blue!60!black
+  pdfauthor={research@strategynet.ai}
 }
-
-\setlength{\parindent}{0pt}
-\setlength{\parskip}{0.52em}
-\widowpenalty=10000
-\clubpenalty=10000
-\displaywidowpenalty=10000
-\setlist[itemize]{itemsep=1pt,parsep=0pt,partopsep=0pt,topsep=0.28em}
-\setlist[enumerate]{itemsep=1pt,parsep=0pt,partopsep=0pt,topsep=0.28em}
 
 \lstdefinestyle{circuit}{
   basicstyle=\ttfamily\footnotesize,
@@ -104,8 +72,9 @@
   }
 }
 
+\SNHeader{strategynet.ai:Hypercube}
 \title{Hypercube Circuits: realtime linear algebra with stateful triggers and replay}
-\author{research@strategynet.ai}
+\author{\href{mailto:research@strategynet.ai}{research@strategynet.ai}}
 \date{August 2026}
 
 \begin{document}
@@ -124,9 +93,13 @@
   and 78 transitions without a mismatch. Aeron, raw-feed replay, checkpoints, 
   circuit-runtime benchmarks, and execution are not yet included.\end{abstract}
 
+\SNtwocolumntableofcontents
+
 \section{Using Hypercube Across Updates}
 
 \subsection{Why the circuit exists}
+
+\begin{SNcolumns}
 
 Hypercube publishes its memory-mapped output as \SLICE{} files.  It already
 calculates fields, factors, ranks, basket discrepancies, and residuals for one
@@ -150,6 +123,8 @@ every update for which \(d_{i,g}>a\).  It usually wants a lifecycle:
 That lifecycle requires state across generations.  The circuit runs after
 Hypercube completes a generation, retains the qualifying count and active
 state for each entity, and reports only genuine state changes.
+
+\end{SNcolumns}
 
 \clearpage
 \subsection{Programs in the repository}
@@ -433,6 +408,8 @@ useful than factor-only replay because changes to rows, node graphs, transforms,
 or arithmetic can be detected.  It stops short of claiming that vendor
 normalization and multi-feed generation assembly are reproducible.
 
+\begin{SNcolumns}
+
 \subsection{Recording format}
 
 A recording is
@@ -555,6 +532,8 @@ This distinction supports two workflows:
   \item \textbf{counterfactual replay}: intentionally change a node, threshold,
         or model and analyze the resulting divergence.
 \end{itemize}
+
+\end{SNcolumns}
 
 \clearpage
 \subsection{Disable external effects during replay}
@@ -828,6 +807,8 @@ throughput claim.
 
 \section{Practical Use and Next Steps}
 
+\begin{SNcolumns}
+
 \subsection{Factor-to-signal service}
 
 A live service can run the components in this order:
@@ -866,7 +847,10 @@ counterfactual command would accept a different graph or trigger
 configuration, mark the run as non-exact, and report the first generation
 whose values or transitions changed.
 
+\end{SNcolumns}
+
 \clearpage
+\begin{SNcolumns}
 \subsection{Current limits}
 
 The current code covers one complete calculation-and-replay path:
@@ -922,6 +906,8 @@ provides current output, and the replay demo checks 40 recorded generations.
 Publishing callback state to \SLICE{} is the next practical addition.  Aeron
 transport, raw-feed reconstruction, checkpoints, circuit benchmarks, and
 execution remain future work.
+
+\end{SNcolumns}
 
 \clearpage
 \begin{thebibliography}{9}
