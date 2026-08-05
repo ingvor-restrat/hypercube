@@ -73,8 +73,8 @@
 
 \begin{abstract}
 A live basket monitor may recalculate thousands of values whenever prices
-change.  The arithmetic is usually cheap.  Repeatedly finding, joining,
-serializing, and copying the same current inputs is not.  When every reader
+change.  The arithmetic is usually cheap; repeatedly finding, joining,
+serializing, and copying the same current inputs often dominates the cost.  When every reader
 rebuilds that state for itself, a simple vector calculation inherits database
 latency, extra allocation, and inconsistent observation boundaries.
 \SLICE{} gives local processes a typed, memory-mapped view of current,
@@ -89,9 +89,9 @@ explicit state owners.  A reproducible benchmark suite tests those choices.
 A separate leakage-controlled experiment compares rolling-\(z\) event selection
 with calibrated point, robust, quantile, and triple-barrier tree models under
 stationary and regime-switching controls.
-This paper explains that implemented path and its limits.  Separate slices are
-not yet one atomic
-multi-slice generation; vendor feeds, durable persistence, arbitrary function
+This paper explains that implemented path and its limits.  The current version
+publishes slices independently and provides no atomic multi-slice generation;
+vendor feeds, durable persistence, arbitrary function
 cells, replication, GPU lowering, and trading actions remain outside the
 current release.  Although the examples use markets, the API also works for
 any stable set of entities.
@@ -115,7 +115,7 @@ database, the database becomes part of the latency and availability path even
 when the working set is only a few megabytes of current vectors.
 
 \Needspace{8\baselineskip}
-The distinction is temporal rather than ideological:
+The distinction concerns time and purpose:
 \begin{itemize}
   \item an event log answers what happened and in what order;
   \item a durable analytical store answers historical and ad hoc questions;
@@ -145,9 +145,9 @@ entity-aligned weights \(w\), returns \(r\), signals \(s\), and betas
   G=\lVert w\rVert_1.
 \]
 The arithmetic is elementary.  Most accidental complexity lies in obtaining
-vectors that refer to the same entities, units, observation boundary, and
-generation.  The system therefore treats alignment and publication semantics
-as first-class data contracts.
+vectors that refer to the same entities, units, observation cutoff, and
+generation.  The system therefore records alignment and publication semantics
+as first-class metadata.
 
 \section{Design goals}
 
@@ -159,20 +159,20 @@ The present architecture has six goals:
         without taking a shared reader mutex;
   \item reject linear algebra across incompatible entity layouts or value
         schemas;
-  \item run the same node graph in live, replay, and batch modes by changing
-        the supplied update rather than the calculation;
+  \item run the same node graph in live, replay, and batch modes with a fixed
+        calculation and mode-specific updates;
   \item publish node identity, observation timestamps, coverage, and local
         compute diagnostics beside values;
   \item leave room for typed, composable function cells without
         allowing calculation code to inherit trading authority.
 \end{enumerate}
 
-The first implementation intentionally narrows the platform contract.  It is
+The first implementation is intentionally narrow.  It is
 little-endian, uses fixed-size pointer-free payloads, and assumes one writer
 with many readers per slice.  Those constraints make the shared ABI explicit
 enough for Rust today and C++ or Python readers later.  A richer type system,
 distributed replication, global multi-slice generations, and effectful
-actions are evolution points, not implicit properties of the current files.
+actions require explicit extensions to the current file format.
 
 \end{SNcolumns}
 
@@ -192,12 +192,12 @@ Columnar memory systems establish the advantages of contiguous, typed buffers.
 Apache Arrow defines a language-independent columnar representation designed
 for sequential scans, constant-time random access, vectorization, and
 relocatable zero-copy shared-memory access \cite{arrow}.  \SLICE{} shares
-those physical motivations but has a smaller purpose: mutable current-state
-vectors with stable entity slots and explicit writer epochs.  It is not an
-Arrow implementation or a replacement for its interoperability ecosystem.
+those physical motivations but serves a narrower purpose: mutable current-state
+vectors with stable entity slots and explicit writer epochs.  Arrow remains the
+interoperability format and ecosystem.
 
-Array database work treats multidimensional arrays as first-class data rather
-than encoding every analytical object as a relation.  SciDB, for example, was
+Array database work treats multidimensional arrays as first-class data and
+avoids encoding every analytical object as a relation.  SciDB, for example, was
 designed for complex analytics over array-shaped scientific data
 \cite{scidb}.  The hypercube developed here is closer to a resident execution
 and publication model than a general array DBMS.  Dimensions describe aligned
@@ -213,10 +213,10 @@ leaves room for optimized CPU, SIMD, or GPU kernels behind the same logical
 operation.
 
 For change propagation, adaptive functional programming and differential
-dataflow show how explicit dependencies allow a system to update affected
-results rather than recompute an entire program \cite{adaptive,differential}.
+dataflow show how explicit dependencies allow a system to update only affected
+results \cite{adaptive,differential}.
 Those systems are broader and more formal than the current hypercube engine.
-They nevertheless supply the right conceptual boundary for future function
+They nevertheless supply the right design model for future function
 cells: a declared dependency graph, logical time, deterministic propagation,
 and controlled state are preferable to hidden callbacks attached to mutable
 memory.
@@ -270,7 +270,7 @@ a partial vector
 where \(V_f\) is a fixed physical type and \(\bot\) denotes missing or invalid
 state.  Dense analytical slices usually use \(V_f=\R\); point-state slices use
 fixed records such as quote, trade, or quote-at-trade.  Validity is explicit
-rather than inferred from an arbitrary zero.
+in every record, leaving zero with its ordinary numerical meaning.
 
 The version-one file begins with a 256-byte header:
 \begin{center}
@@ -309,7 +309,7 @@ family, horizon, universe, scenario, portfolio, or model version:
 \[
   X[g,u,f,h,v,s,\ldots].
 \]
-Most of this space is not materialized.  A slice is dense along the entity
+Only a sparse subset of this space is materialized.  A slice is dense along the entity
 axis with the other coordinates fixed.  A catalog maps a semantic name such
 as \texttt{signal} to the file, layout, type, and role that materialize one
 such slice.
@@ -342,8 +342,8 @@ for their operation.
 
 \section{Time, observation, and publication}
 
-``Latest'' is not a sufficient temporal contract for financial decisions.  A
-cell may carry:
+Financial decisions require more temporal detail than ``latest.''  A cell may
+carry:
 \[
   \tau(c)=(t_{\mathrm{event}},t_{\mathrm{ingest}},
            t_{\mathrm{compute}},t_{\mathrm{publish}},g).
@@ -360,7 +360,7 @@ context.  Hypercube \texttt{CellValue} records node, entity key, finite value,
 and the oldest contributing observation time.  \texttt{NodeStatus} records
 emitted and missing counts plus local compute time.  Snapshot time, slice
 updated time, and writer heartbeat remain distinct.  An application may build
-a freshness service level as a predicate, not an intuition:
+a freshness service level with a testable predicate:
 \[
   \operatorname{fresh}(c,t_d)
   \iff \operatorname{status}(c)=\mathrm{ok}
@@ -376,7 +376,7 @@ a freshness service level as a predicate, not an intuition:
 
 The desired property is precise: a reader of an already mapped slice should
 not acquire a process-shared mutex or wait for a writer-owned critical section.
-This is a \emph{reader-lockless} contract, not automatically a formal
+This \emph{reader-lockless} design permits retries and therefore offers no formal
 wait-free guarantee.  An optimistic reader may have to retry, and under a
 continuous writer it may fail to obtain a stable version within its retry
 budget.
@@ -407,10 +407,9 @@ The reader loads \(q_0\), rejects an odd value, copies the payload, and loads
 An update to AAPL therefore does not make a reader of MSFT retry.  This is the
 appropriate granularity for independently changing latest-state records.
 
-The point snapshot of an entire struct slice is a collection of individually
-coherent cells.  It is not, by itself, proof that every slot represents the
-same market instant.  Consumers that need an atomic universe snapshot require
-a generation-level contract.
+The point snapshot of an entire struct slice guarantees coherence for each
+cell independently.  Consumers that need every slot at the same market instant require
+a generation-level snapshot protocol.
 
 \section{Vector protocol}
 
@@ -442,7 +441,7 @@ Different data uses should pay for different consistency:
 \begin{center}
 \begin{tabularx}{\textwidth}{@{}p{0.15\textwidth}p{0.22\textwidth}X X@{}}
 \toprule
-Class & Example & Read contract & Failure behavior \\
+Class & Example & Read guarantee & Failure behavior \\
 \midrule
 cell-latest & quote display, health probe &
 one slot, per-cell sequence & retry or report unavailable \\
@@ -466,7 +465,7 @@ generation.  A trade requires that coherence plus policy and authority.
 
 \section{Published immutable generations}
 
-The next publication layer is a small multi-version protocol.  A writer builds
+The next publication mechanism is a small multi-version protocol.  A writer builds
 generation \(g+1\) in inactive buffers while readers continue to use \(g\).
 After every slice passes shape, schema, and completeness checks, the writer
 publishes one compact manifest:
@@ -528,18 +527,18 @@ manifest then references a vector of immutable shard versions.  Copy-on-write
 touches only changed shards while the manifest preserves a coherent global
 view.
 
-Progress must be measured rather than assumed.  Relevant counters include
+Progress measurements should include
 writer duration, epoch changes per second, reader retries, snapshot failures,
 generation publish latency, oldest pinned generation, and reclaimed bytes.
-If retry tails grow under ingestion load, the answer is not an unbounded spin
-loop.  The system can use smaller shards, longer immutable generations, a
+If retry tails grow under ingestion load, the system can use smaller shards,
+longer immutable generations, a
 copied snapshot, or a stale-but-declared generation according to the
 consumer's consistency class.
 
 \clearpage
 \part{Hypercube Execution}
 
-\section{Runtime contract}
+\section{Runtime inputs and outputs}
 
 The current Rust engine receives
 \[
@@ -556,9 +555,9 @@ where \(n\) is the entity count, \(V\) contains ordered
 \texttt{CellValue} records, and \(Q\) contains ordered \texttt{NodeStatus}
 diagnostics.
 
-The modes are \texttt{Live}, \texttt{Replay}, and \texttt{Batch}.  They are
-recorded context, not separate calculation implementations.  A replay changes
-the supplied clock and rows rather than the meaning of a node.  The engine
+The modes are \texttt{Live}, \texttt{Replay}, and \texttt{Batch}.  All three
+use the same calculation implementation, with the mode recorded as context.
+Replay supplies its own clock and rows while preserving node semantics.  The engine
 rejects a generation that does not advance beyond the last successful update.
 
 \section{Calculation nodes}
@@ -580,8 +579,8 @@ weighted value per entity, optionally normalized by available absolute weight \\
 \end{tabularx}
 \end{center}
 
-Node declaration order is not execution order.  The engine resolves
-dependencies topologically and returns values in declaration order.  Duplicate
+The engine derives execution order topologically and returns values in
+declaration order.  Duplicate
 rows or nodes, empty identifiers, duplicate inputs, non-finite weights, cycles,
 and unknown required dependencies fail the update.  A missing required value
 suppresses that entity's linear output; an optional dependency may be absent.
@@ -612,8 +611,8 @@ already produced indexed dependency edges and a topological order, so later
 generations do not rediscover the same schedule.  The public
 \texttt{graph\_compilations()} counter makes topology churn observable.
 
-This is configuration reuse, not a cross-generation value cache.  The pure
-graph still has no built-in price histories, session accumulators, alias
+This reuses the compiled configuration; every generation still recalculates
+its values.  The pure graph has no built-in price histories, session accumulators, alias
 registries, or implicit window state.  The separate \texttt{RollingMoments}
 primitive gives a simulator or explicitly stateful callback a preallocated
 circular window with online mean and variance.  Its checkpoint and replay
@@ -629,7 +628,7 @@ In a future incremental engine, only nodes whose dependency cones intersect
 changed cells would need to run.
 Logical generation and event time must remain part of the cache key; otherwise
 a fast cache can quietly return a value computed from the wrong observation
-boundary.
+cutoff.
 
 \section{Hot state, persistence, and transport}
 
@@ -663,8 +662,8 @@ browser dashboard, a JSON snapshot, and an SSE stream.  The \texttt{etf} and
 premiums and cointegrating residuals.  These paths make the architecture
 inspectable without external services.
 
-The version-1 file ABI and Rust readers are a public local API, not a remote
-service contract.  The example server has no authentication, entitlement,
+The version-1 file ABI and Rust readers form a public local API.  The example
+server supplies no authentication, entitlement,
 backpressure, or production reconnect guarantees.  Vendor feeds, durable
 stores, host-to-host transport, and a governed gateway require separate
 adapters and policies; none is hidden in the public engine.
@@ -692,7 +691,7 @@ state.  The dependency graph is explicit.  Acyclic pure expressions can be
 topologically evaluated; windowed or recursive expressions require declared
 state and logical-time semantics.
 
-Composability comes from retaining the same cell contract at each stage.  A
+Composability comes from retaining the same cell schema at each stage.  A
 quote midpoint can feed a return; returns can feed factors; factors can feed a
 portfolio or index; the resulting discrepancy can feed a decision rule.  Each
 output remains addressable, versioned, and independently inspectable.
@@ -703,7 +702,7 @@ Not every function should have the same authority:
 \begin{center}
 \begin{tabularx}{\textwidth}{@{}p{0.17\textwidth}p{0.25\textwidth}X@{}}
 \toprule
-Class & Examples & Contract \\
+Class & Examples & Guarantee \\
 \midrule
 pure scalar/vector & midpoint, return, dot product, normalization &
 deterministic for a generation; no hidden I/O \\
@@ -840,16 +839,15 @@ it.
   \draw[slicefuture] (intent) -- (effect);
 \end{tikzpicture}%
 }
-\caption{The calculation is already vector-shaped.  Dashed edges mark future
-decision and effect layers, not current slice behavior.}
+\caption{The calculation is already vector-shaped.  Solid edges show current
+slice behavior; dashed edges show proposed decision and effect stages.}
 \label{fig:etf}
 \end{figure}
 
 The same pattern supports baskets, hedges, factor-mimicking portfolios, risk
 decompositions, and observed-versus-model residuals.  The significant
-abstraction is not the ETF formula itself.  It is the ability to compose
-versioned values and functions while preserving a coherent generation and an
-explicit effect boundary.
+abstraction is the ability to compose versioned values and functions while
+preserving a coherent generation and keeping effects explicit and separate.
 
 \section{Noise-aware statistical-arbitrage selection study}
 
@@ -858,8 +856,8 @@ with the preceding 20 observations.  Our research harness begins with that same
 signal and the same mean-reversion trade direction, then gives a fitted model
 one job: rank the candidate trades and decide which ones are worth taking.  By
 defining the economic trade before the model sees it, we can compare every
-model with the rolling \(z\)-score policy and attribute any improvement to
-better selection rather than to a change in strategy.
+model with the rolling \(z\)-score policy while holding the strategy constant.
+Any improvement then reflects candidate selection.
 
 For candidate time \(t\), let
 \[
@@ -918,8 +916,8 @@ and multiclass objectives \cite{lightgbm,catboost}.  Ordinary regression aims
 at the conditional mean return, whereas Huber loss gradually changes from a
 quadratic penalty near zero to a linear penalty in the tails, reducing the
 influence of an extreme outcome \cite{huber}.  Quantile regression describes
-several points in the conditional return distribution instead of reducing that
-distribution to its mean \cite{quantileregression}.  For
+several points in the conditional return distribution and retains information
+beyond its mean \cite{quantileregression}.  For
 \(q\in\{0.2,0.5,0.8\}\), we measure the coverage error during the calibration
 period and apply the following fixed correction to later forecasts:
 \[
@@ -937,8 +935,8 @@ is wide:
 Requiring the corrected 20th percentile to exceed zero would reject almost
 every event in the reference test because stop outcomes account for more than
 one fifth of the distribution.  The score above still responds to lower-tail
-risk while allowing the strategy to compare candidates rather than abstaining
-almost completely.
+risk and lets the strategy compare candidates despite the high rate of stop
+outcomes.
 
 Class weighting helps the three-way models learn the less frequent outcomes,
 but it also means that their raw scores should not be read directly as
@@ -987,8 +985,8 @@ regime stress, LightGBM Huber & 7.181 & +0.555 & 5/5 & +32.926 \\
 \includegraphics[width=\textwidth]{../../experiments/statarb_ml/results/statarb_ml_robustness.png}
 \caption{Difference from the rolling-\(z\) trade-return \(t\)-statistic for five
 complete deterministic seeds; black segments mark means.  The statistic is
-descriptive over normalized net trade returns, not annualized Sharpe or a
-dependence-corrected significance test.}
+descriptive over normalized net trade returns.  Annualized Sharpe and a
+dependence-corrected significance test require separate estimates.}
 \label{fig:statarb-ml-robustness}
 \end{figure}
 
@@ -1037,7 +1035,7 @@ The repository contains two principal Rust crates:
 \begin{center}
 \begin{tabularx}{\textwidth}{@{}p{0.22\textwidth}X X@{}}
 \toprule
-Component & Implemented responsibilities & Present boundary \\
+Component & Implemented responsibilities & Present limits \\
 \midrule
 \texttt{hypercube-slice} &
 layout and catalog validation; versioned headers; \(f64\), quote, trade, and
@@ -1056,10 +1054,11 @@ function cells, or production web service \\
 \end{tabularx}
 \end{center}
 
-The slice crate supplies fixed quote, trade, and TAQ record schemas but does
-not ingest a live feed.  Callers own the meanings and provenance of records
-they publish.  The engine accepts ordinary in-process rows rather than reading
-input slices directly.  Its publisher projects selected calculated nodes into
+The slice crate supplies fixed quote, trade, and TAQ record schemas; callers
+handle live-feed ingestion and retain responsibility for record meaning and
+provenance.  Callers provide the engine with ordinary in-process rows; direct
+input-slice reads are outside the current adapter.  Its publisher projects
+selected calculated nodes into
 \(f64\) slices sharing one entity layout; it does not publish factor-family
 rollups, portfolio projections, or application-specific summaries.
 
@@ -1084,7 +1083,7 @@ separately so its host and postconditions remain explicit.
 
 The implementation was cross-checked against the Imperial HFT design-pattern
 and pairs-trading corpus at commit \texttt{5783606} \cite{imperial}.  Its most
-useful result was not a particular intrinsic.  Reusing the pairs window alone
+useful result came from reusing the pairs window, which alone
 reduced its checked-in benchmark median from 334.7 to 172.9 microseconds; the
 combined fixed buffer, one-pass moments, and AVX variant reached 66.3
 microseconds.  Explicit SIMD alone reached 302.9 microseconds, while software
@@ -1100,7 +1099,7 @@ Hypercube therefore adopted four bounded changes:
 \end{enumerate}
 Forced inlining, manual unrolling, prefetching, and explicit SIMD remain
 benchmark-gated.  Rust's portable SIMD API is still experimental, and target
-features require an explicit deployment contract \cite{rustsimd,rusttarget}.
+features require an explicit deployment configuration \cite{rustsimd,rusttarget}.
 
 For the rolling window, state is \((n,\mu,M_2)\), where
 \(M_2=\sum_i(x_i-\mu)^2\).  Adding \(x\) uses the centered Welford update
@@ -1179,10 +1178,10 @@ algorithms in the same current harness.}
 At 128 entities the durable publisher remained statistically unchanged because
 the synchronous operating-system flush dominates.  The explicit mapped-memory
 policy measured 12.76 microseconds at 128 entities and 109.04 microseconds at
-1,024, but it has a weaker postcondition: visibility is not durable storage
-\cite{memmapflush}.  The host was not isolated, frequency-locked, or
-core-pinned.  These are development-host microbenchmarks rather than tail
-latency, contention, NUMA, crash-recovery, or production-SLA evidence.  Full
+1,024, but it has a weaker postcondition: memory visibility without storage
+durability \cite{memmapflush}.  The host ran without isolation, frequency
+locking, or core pinning.  These development-host microbenchmarks provide no
+evidence about tail latency, contention, NUMA, crash recovery, or production SLAs.  Full
 commands, confidence limits, and the pattern-by-pattern audit are checked in as
 \texttt{docs/performance.md}.
 
@@ -1223,11 +1222,10 @@ input-to-node-to-publication latency.
 
 \section{Limits}
 
-The current implementation establishes a credible vertical slice, not a
-finished universal memory system:
+The current implementation covers the following vertical slice and limits:
 \begin{itemize}
-  \item published output vectors are stable per slice but not globally atomic
-        across the complete output set;
+  \item published output vectors are stable per slice; global atomicity across
+        the complete output set is absent;
   \item vector readers use optimistic retry and can fail to progress within a
         fixed budget under sustained writes;
   \item shared atomic and payload behavior requires explicit cross-process,
@@ -1238,11 +1236,11 @@ finished universal memory system:
         separate work;
   \item vendor ingestion, durable persistence, and direct input-slice adapters
         are outside the public repository;
-  \item the hypercube is a typed calculation runtime, but arbitrary function
+  \item the current typed calculation runtime excludes arbitrary function
         cells, automatic incremental invalidation, model sandboxing, and GPU
-        lowerings are not implemented;
-  \item action cells and trading authority are future architecture and must
-        not be implied by the presence of a calculated discrepancy.
+        lowerings;
+  \item action cells and trading authority require separate architecture; a
+        calculated discrepancy conveys no trading authority.
 \end{itemize}
 
 These limits are part of the contribution.  They identify where a simple
@@ -1274,14 +1272,14 @@ stages:
 \Needspace{6\baselineskip}
 Each stage should be useful independently.  A community member may only need a
 fast stable-layout shared vector, a factor researcher may use the replay/live
-hypercube contract, and a systems researcher may focus on multi-slice
+hypercube interface, and a systems researcher may focus on multi-slice
 generation consistency.  The project does not need to expose trading authority
 to make its memory and composition model valuable.
 
 \section{Conclusion}
 
-\SLICE{} reduces current analytical state to a small, inspectable
-contract: fixed typed cells, stable entity slots, versioned headers, and
+\SLICE{} reduces current analytical state to a small, inspectable design: fixed
+typed cells, stable entity slots, versioned headers, and
 reader-lockless publication protocols.  The hypercube restores the dimensions
 that a raw vector alone cannot express---entity, primitive field, calculated
 node, and generation---while keeping common operations compatible with
@@ -1306,7 +1304,7 @@ The germinal system is therefore already present: a live memory plane, an
 aligned multidimensional calculation model, and versioned outputs that can be
 read repeatedly at low cost.  The open-source work is to make its guarantees
 portable, its generation semantics complete, its benchmarks representative
-across deployment classes, and its function boundary explicit.
+across deployment classes, and its function interface explicit.
 
 \end{SNcolumns}
 

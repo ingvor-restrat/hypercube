@@ -90,8 +90,8 @@
   when callbacks cannot keep up. The same run can be written to JSON Lines and 
   replayed through a fresh engine to check the calculations and callback state. 
   The demo replays 40 generations, 6,400 factor cells, 1,280 trigger-state cells, 
-  and 78 transitions without a mismatch. Aeron, raw-feed replay, checkpoints, 
-  circuit-runtime benchmarks, and execution are not yet included.\end{abstract}
+  and 78 transitions without a mismatch. The current implementation excludes Aeron,
+  raw-feed replay, checkpoints, circuit-runtime benchmarks, and execution.\end{abstract}
 
 \SNtwocolumntableofcontents
 
@@ -224,9 +224,9 @@ The per-frame context is
   K_g=(q_g,g,t_g,m_g),
 \]
 where \(q_g\) is the circuit sequence.  Stateful code uses \(g\) and \(t_g\)
-as logical coordinates.  Processor scheduling time, operating-system time,
-and measured calculation duration are operational observations, not inputs to
-the state transition function.
+as logical coordinates.  The state transition function consumes these logical
+coordinates.  Processor scheduling time, operating-system time, and measured
+calculation duration are recorded separately as operational observations.
 
 \subsection{Ordered callback execution with Disruptor}
 
@@ -241,7 +241,7 @@ The current circuit chooses a single producer because Hypercube generations
 already have one ordered owner.  One stateful processor consumes them in
 sequence.  The ring offers:
 \begin{itemize}
-  \item a preallocated bounded handoff rather than unbounded queue growth;
+  \item a preallocated handoff with fixed capacity;
   \item a circuit sequence independent of wall-clock timestamps;
   \item nonblocking submission with a visible \texttt{RingFull} result;
   \item configurable sleep, spin-loop, and busy-spin waiting;
@@ -271,7 +271,7 @@ generation.  On a full ring, an owner must choose one of three policies:
 The engine does not accept the next update until callback processing and the
 recording step complete.  Where an upstream market feed cannot be slowed, the
 feed should be archived before generation assembly.  The circuit is then a
-deterministic consumer of durable input, not the sole owner of history.
+deterministic consumer, while the durable archive remains the system of record.
 
 The ring does not provide raw-feed storage, cross-host recovery, multi-stream
 generation assembly, or duplicate protection for external effects.
@@ -324,7 +324,7 @@ through the hysteresis band and exits only when
   x_{i,g}\le b.
 \]
 If the watched node has no value for an active entity, the state is
-\emph{invalidated}, not silently exited.  If a qualifying but inactive entity
+\emph{invalidated}; exit still requires the declared exit threshold.  If a qualifying but inactive entity
 is missing, its count is removed, so a later value cannot falsely complete a
 ``consecutive'' run across a gap.
 
@@ -384,11 +384,11 @@ consumer needs to rerun the factor calculation or the threshold callback.
 
 \subsection{What to record}
 
-``Replay the system'' is incomplete until the recorded boundary is named.
+``Replay the system'' is incomplete until the recording scope is named.
 \begin{center}
 \begin{tabularx}{\textwidth}{@{}p{0.20\textwidth}p{0.27\textwidth}X@{}}
 \toprule
-Recorded boundary & What replay reconstructs & Tradeoff \\
+Recording scope & What replay reconstructs & Tradeoff \\
 \midrule
 published factor frame &
 callbacks, strategies, and downstream state only &
@@ -443,8 +443,8 @@ line.  It validates:
 JSON parsing enables exact finite \(f64\) round trips.  NaN and infinity are
 rejected before the engine advances because JSON would otherwise encode them
 as \texttt{null}; a missing primitive is represented by omitting its field.
-The format is intentionally inspectable and not presented as the final
-low-latency wire encoding.
+This inspectable format serves the current recording path; a low-latency wire
+encoding requires a separate binary schema.
 
 \subsection{What replay compares}
 
@@ -468,8 +468,8 @@ The current digest is a versioned streaming xxHash64 over a canonical byte
 representation.  Digest equality is supplemented by exact comparison of the
 full ordered state and transition outputs.  The build and configuration
 identities remain provenance: a different compiler, target, or implementation
-may be replayed, but any arithmetic difference is reported rather than
-normalized away.
+may be replayed, and every arithmetic difference is reported without
+normalization.
 
 Replay compares calculated values and state transitions.  It does not compare
 processor scheduling, compute duration, or transport timing.
@@ -528,7 +528,7 @@ Exit & Meaning \\
 This distinction supports two workflows:
 \begin{itemize}
   \item \textbf{reconstruction}: expect zero divergence under the same
-        implementation contract;
+        implementation and configuration;
   \item \textbf{counterfactual replay}: intentionally change a node, threshold,
         or model and analyze the resulting divergence.
 \end{itemize}
@@ -552,13 +552,13 @@ reference to the generation that produced it.
 
 \section{Deployment}
 
-\subsection{Use Aeron at a process boundary}
+\subsection{Use Aeron between processes}
 
 Inside one compute process, Aeron is unnecessary for the engine-to-callback
 handoff.  The immutable snapshot is already in memory; the Disruptor provides
 ordered inter-thread transfer without serialization or a media driver.
 
-Aeron becomes useful at a process or host boundary:
+Aeron becomes useful between processes or hosts:
 \begin{itemize}
   \item factor/state publication to independent services;
   \item durable capture of normalized inputs or generation envelopes;
@@ -617,7 +617,7 @@ them from raw feeds.
   \draw[circuitflow] (cube) -- (circuit);
   \draw[circuitflow] (circuit) -- (views);
   \node[circuitmeta, below=10mm of assembler] (archive)
-    {\textbf{Archive}\\raw or update boundary};
+    {\textbf{Archive}\\raw or complete updates};
   \draw[circuitrecord] (feed) -- (archive);
   \draw[circuitrecord] (assembler) -- (archive);
   \node[circuiteffect, below=10mm of views] (effect)
@@ -675,7 +675,7 @@ residual is
   y_{j,g}=\log A_{j,g}-\alpha_j-\beta_j\log B_{j,g}.
 \]
 It standardizes the current residual against the preceding \(W=20\)
-observations, not a window containing the current observation.  With
+observations; the current observation enters only after scoring.  With
 \(\mathcal W_{j,g}=\{y_{j,g-W},\ldots,y_{j,g-1}\}\),
 \[
   \bar y_{j,g}=\frac{1}{W}\sum_{u\in\mathcal W_{j,g}}u,
@@ -698,7 +698,7 @@ standardized dislocations while retaining hedge ratio and half-life context.}
 
 The threshold callback can enter only after the \(z\)-score remains large for
 several generations and exit at a lower threshold.  If either leg disappears,
-it reports invalidation rather than convergence.  Out-of-sample parameter
+it reports invalidation; convergence requires both legs.  Out-of-sample parameter
 fitting, structural-break detection, borrow, costs, and portfolio limits remain
 outside the demo.
 
@@ -715,8 +715,8 @@ The callback adds two outputs:
   \item a sparse transition stream suitable for already synchronized
         subscribers.
 \end{itemize}
-The browser stream and \SLICE{} files contain current output, not replay
-history.  The JSON Lines recording contains the updates needed for replay.
+The browser stream and \SLICE{} files contain current output only.  Replay
+history resides in the JSON Lines recording.
 
 \subsection{Replay demo}
 
@@ -753,8 +753,8 @@ divergent generations & \multicolumn{2}{r}{0} \\
 \end{tabularx}
 \end{center}
 
-The file contains 41 lines: one manifest and 40 generation records.  This is a
-functional exactness result, not a throughput or storage benchmark.
+The file contains 41 lines: one manifest and 40 generation records.  This
+demonstrates functional exactness.  Throughput and storage require separate benchmarks.
 The repository also includes an animated
 \href{https://github.com/ingvor-restrat/hypercube/blob/main/docs/markup/circuit-replay.gif}
 {Hypercube terminal demo} that shows qualifying state, entries, exits,
@@ -855,17 +855,17 @@ whose values or transitions changed.
 
 The current code covers one complete calculation-and-replay path:
 \begin{itemize}
-  \item JSON Lines is the only recording adapter; Aeron Archive and SBE mapping
-        are specified but not implemented;
-  \item complete updates are replayed, not raw vendor events or generation
-        assembly;
+  \item JSON Lines is the only implemented recording adapter; specifications
+        also describe Aeron Archive and SBE mapping;
+  \item replay consumes complete updates; raw vendor events and generation
+        assembly remain upstream;
   \item one threshold processor is provided; a reusable rolling-moment
         primitive now exists, but general callback composition, serialized
         window state, and model artifacts need additional schemas;
-  \item replay begins at generation zero; state checkpoints and seek are not
-        implemented;
-  \item xxHash64 detects ordinary divergence but is not a cryptographic
-        authenticity proof;
+  \item replay begins at generation zero and currently offers no state
+        checkpoints or seek operation;
+  \item xxHash64 detects ordinary divergence; cryptographic authenticity
+        requires an authenticated digest or signature;
   \item state vectors are public structs but no dedicated trigger-to-\SLICE{}
         publisher is included;
   \item no circuit benchmark justifies a wait strategy, ring size, or deployment
@@ -873,8 +873,9 @@ The current code covers one complete calculation-and-replay path:
   \item no external-effect or trading authority exists in the circuit crate.
 \end{itemize}
 
-The \texttt{verify} command is therefore a calculation check, not a production
-recovery tool.  Trigger state is data, not an executable order.
+The \texttt{verify} command checks calculations.  Production recovery requires
+checkpoint and seek support.  Trigger state records data; order creation requires
+separate trading authority and execution integration.
 
 \subsection{Next steps}
 
