@@ -66,7 +66,7 @@
 \SNHeader{strategynet.ai:Hypercube}
 \title{Hypercube: core memory-mapped real time factors}
 \author{\href{mailto:research@strategynet.ai}{research@strategynet.ai}}
-\date{August 2026}
+\date{October 2026}
 
 \begin{document}
 \maketitle
@@ -86,6 +86,10 @@ live browser and terminal demonstrations.  The current implementation also
 reuses compiled graph plans and publication buffers, distinguishes mapped
 visibility from durable flush, and supplies fixed-capacity online moments for
 explicit state owners.  A reproducible benchmark suite tests those choices.
+An indexed-projection runtime now gathers cells from coherent snapshots or
+other projections, applies registered stateless functions, and publishes
+immutable contiguous strips with independent output layouts.  Graph definitions
+can be registered at runtime and recovered from configuration.
 A separate leakage-controlled experiment compares rolling-\(z\) event selection
 with calibrated point, robust, quantile, and triple-barrier tree models under
 stationary and regime-switching controls.
@@ -163,8 +167,9 @@ The present architecture has six goals:
         calculation and mode-specific updates;
   \item publish node identity, observation timestamps, coverage, and local
         compute diagnostics beside values;
-  \item leave room for typed, composable function cells without
-        allowing calculation code to inherit trading authority.
+  \item compose indexed stateless projections with versioned definitions and
+        immutable results, while leaving stateful cells and execution authority
+        to explicit extensions.
 \end{enumerate}
 
 The first implementation is intentionally narrow.  It is
@@ -216,8 +221,8 @@ For change propagation, adaptive functional programming and differential
 dataflow show how explicit dependencies allow a system to update only affected
 results \cite{adaptive,differential}.
 Those systems are broader and more formal than the current hypercube engine.
-They nevertheless supply the right design model for future function
-cells: a declared dependency graph, logical time, deterministic propagation,
+They nevertheless supply the right design model for future incremental and
+stateful cells: a declared dependency graph, logical time, deterministic propagation,
 and controlled state are preferable to hidden callbacks attached to mutable
 memory.
 
@@ -642,6 +647,12 @@ cutoff.
   \draw[sliceflow] (input) -- (cube);
   \draw[sliceflow] (cube) -- (snapshot);
   \draw[sliceflow] (snapshot) -- (publish);
+  \node[slicehot, below=of snapshot] (projections)
+    {\textbf{ProjectionRuntime}\\picks and calculations};
+  \node[slicemeta, below=of publish] (strips)
+    {\textbf{Immutable strips}\\independent layouts};
+  \draw[sliceflow] (snapshot) -- (projections);
+  \draw[sliceflow] (projections) -- (strips);
 \end{tikzpicture}
 \caption{The implemented public path.  Vendor feeds, durable persistence,
 replication, and production gateways are outside the repository.}
@@ -670,10 +681,104 @@ adapters and policies; none is hidden in the public engine.
 
 \part{Composable Cells}
 
+\section{Implemented indexed projections}
+
+The \texttt{hypercube::projection} module supplies a stateless materialized-view
+layer over \texttt{Arc<Snapshot>}.  A \texttt{ProjectionSpec} names an ordered
+list of picks, a registered function, finite parameters, an output layout,
+and a positive definition version.  A pick names an engine node or another
+projection and a key in that source's declared layout.  For graph revision
+\(r\) and input generation \(g\), evaluation is
+\[
+  y_{p,g}^{(r)} = f_p\!\left(
+    [x_{s_1,g}[k_1],\ldots,x_{s_m,g}[k_m]];\theta_p\right).
+\]
+Here a source \(s_i\) can itself be a previously resolved projection in the
+same revision.  Every transitive input belongs to generation \(g\).
+
+Membership relationships can represent overlapping hyperedges, while
+calculation dependencies form the acyclic graph used for scheduling.
+Ordered picks permit repeated membership.  Output keys must be unique within
+a strip: a group reduction may use basket IDs, while a member-preserving
+calculation can use keys such as \texttt{sector/instrument}.  Output layouts
+need not match any source layout.
+
+\subsection{Basket and residual example}
+
+The executable \texttt{projections} example reads a JSON graph after the engine
+has started.  Its two definitions compute
+\begin{align*}
+  b_g &= 0.5r_{\mathrm{NVDA},g}
+       +0.3r_{\mathrm{AMD},g}+0.2r_{\mathrm{AVGO},g},\\
+  e_g &= r_{\mathrm{NVDA},g}-0.8b_g-0.2r_{\mathrm{SPY},g}.
+\end{align*}
+The basket strip has output key \texttt{SEMIS}; the residual strip has key
+\texttt{NVDA}.  Their definitions may appear in either order because staging
+resolves dependencies.  The built-in \texttt{weighted\_sum@1} takes one weight
+per pick and does not normalize weights.  \texttt{gather@1} returns the picked
+values unchanged.  Other functions implement \texttt{ProjectionFunction},
+including shape validation and calculation, under a stable versioned registry
+name.  Implementations must be deterministic, stateless, and free of side
+effects; a registered name cannot be replaced.
+
+\begin{lstlisting}[style=slice]
+cargo run -p hypercube-engine --example projections
+\end{lstlisting}
+
+The complete definition is in
+\texttt{crates/hypercube/examples/projections.json}.  The example also serializes
+the config, restores it into a fresh runtime, and checks identical results for
+the same retained input snapshot.
+
+\subsection{Runtime activation and concurrency}
+
+\texttt{ProjectionRuntime::stage} validates a complete graph revision, checks
+layouts and function shapes, rejects cycles and unknown sources, and compiles
+picks into layout offsets.  Each incoming snapshot is resolved by entity key,
+so reordered or omitted cells cannot silently redirect a pick.  Graph revisions
+increase monotonically; changed definitions also require higher definition
+versions.  Dependencies resolve together in a graph revision, so an unchanged
+downstream definition can consume a revised upstream definition explicitly
+identified by that revision.
+
+One mutable owner evaluates the graph synchronously.  A pending revision becomes
+active only when the entire generation succeeds.  Missing or non-finite picked
+inputs, calculation errors, wrong output lengths, or non-finite outputs fail the
+evaluation.  Missing unpicked cells are allowed.  Failure retains the previous
+published frame and pending revision, permitting a retry of the same generation;
+it never substitutes previous-generation inputs.  The engine's already accepted
+update remains accepted, so callers retain its snapshot when retrying projections.
+
+Every \texttt{ProjectionStrip} binds its values, ordered output keys, definition
+version, graph revision, and generation.  Published strips and frames are owned
+through \texttt{Arc}; old readers retain their storage while newer generations
+are calculated and published.  A frame also retains its source snapshot and
+exact config.  Applications distribute completed frames through their own
+channels or synchronization.  This implementation introduces neither a worker
+pool nor concurrently mutable result buffers.
+
+\subsection{Recovery and storage boundary}
+
+\texttt{ProjectionConfig} is serializable with \texttt{serde\_json}.  Applications
+own durable config storage and register compatible function implementations on
+restart.  Config recovery restores definitions, not input history, materialized
+values, or the runtime's earlier generation and definition-version guards.
+Reproducing a changing graph requires its activation history and corresponding
+input generations.  Circuit recordings and snapshot digests do not automatically
+include projection definitions or results.
+
+An in-process \texttt{ProjectionStrip} is distinct from a memory-mapped
+\texttt{.slice} file.  The projection runtime consumes coherent snapshots and
+does not read live mapped payloads or publish an atomic group of files.
+The existing \texttt{SlicePublisher} accepts engine snapshots, not projection
+frames with independent layouts.  Dynamic membership rules, stateful/windowed
+projection functions, and automatic projection replay remain future work.
+
 \section{From values to functions}
 
-The current cube materializes primitive values and runs a fixed set of node
-types.  The general cell model is
+The engine's field and linear node types now coexist with registered stateless
+projection functions over finite \(f64\) values.  A broader typed and stateful
+cell model remains an extension:
 \[
   c=(\tau,\sigma,\pi,\nu),
 \]
@@ -1045,11 +1150,13 @@ little-endian; one writer per slice; local file-backed mappings \\
 \texttt{hypercube-engine} &
 generation-checked updates; field and linear nodes; five cross-sectional
 transforms; reusable graph plans; deterministic snapshots and status;
+indexed stateless projections, runtime graph revisions, immutable strips,
+and recoverable configs;
 fixed-capacity rolling moments; buffered output \texttt{SlicePublisher} with
 explicit durability; generic and OU market injectors; HTTP/SSE plus
 \texttt{etf} and \texttt{pairs} terminal demonstrations &
-complete in-process rows per update; no vendor adapter, persistence, general
-function cells, or production web service \\
+complete in-process rows per update; no vendor adapter, automatic persistence,
+general stateful cells, or production web service \\
 \bottomrule
 \end{tabularx}
 \end{center}
@@ -1060,7 +1167,15 @@ provenance.  Callers provide the engine with ordinary in-process rows; direct
 input-slice reads are outside the current adapter.  Its publisher projects
 selected calculated nodes into
 \(f64\) slices sharing one entity layout; it does not publish factor-family
-rollups, portfolio projections, or application-specific summaries.
+rollups, portfolio projections, or application-specific summaries directly.
+The separate projection runtime can calculate such summaries in process with
+explicit output layouts; a projection-to-file adapter is not included.
+
+The October 2026 workspace suite passes 45 tests on stable Rust and Rust 1.81.0.
+Eight projection tests cover composition, config recovery, revision activation,
+retained readers, repeated/reordered picks, retries, validation, and invalid
+results.  These tests do not establish projection throughput or cross-process
+publication performance; the measurements below remain the August baseline.
 
 \section{Scale model and reproducible baseline}
 
@@ -1230,15 +1345,15 @@ The current implementation covers the following vertical slice and limits:
         fixed budget under sustained writes;
   \item shared atomic and payload behavior requires explicit cross-process,
         cross-language, x86-64, and aarch64 conformance evidence;
-  \item layouts are stable while running; dynamic mutation requires a new
-        layout and coordinated publication;
+  \item mapped-file layouts remain stable while running; in-process projection
+        layouts may change through versioned graph replacement;
   \item replication and general live gateway generation protocols remain
         separate work;
   \item vendor ingestion, durable persistence, and direct input-slice adapters
         are outside the public repository;
-  \item the current typed calculation runtime excludes arbitrary function
-        cells, automatic incremental invalidation, model sandboxing, and GPU
-        lowerings;
+  \item stateless indexed projections are implemented, but dynamic membership,
+        general stateful cells, automatic incremental invalidation, model
+        sandboxing, and GPU lowerings remain outside the runtime;
   \item action cells and trading authority require separate architecture; a
         calculated discrepancy conveys no trading authority.
 \end{itemize}
@@ -1261,8 +1376,8 @@ stages:
         and aarch64;
   \item implement a general immutable generation manifest with reader pinning,
         crash recovery, and optional changed-shard publication;
-  \item formalize typed pure and stateful function-cell interfaces, dependency
-        identity, change propagation, and replay equivalence;
+  \item extend the stateless projection interface with richer types, declared
+        state, change propagation, and recorded revision/replay semantics;
   \item build the ETF/index example through fair value and discrepancy as a
         deterministic reference application;
   \item specify decision intents and a simulated effect adapter before any
@@ -1293,10 +1408,10 @@ multi-vector decisions.  This
 avoids locking an entire analytical universe for every market change without
 pretending that all consumers can accept the same consistency.
 
-Function cells would extend the model from shared values to a richer shared
-computation graph.  Pure and explicitly stateful nodes could compose data into
-returns, factors, portfolios, ETF or index values, and observed-model
-residuals.  Decision nodes may produce bounded intents, but effects remain
+Indexed stateless projections now extend the model from aligned cross-sections
+to an explicit graph of selected values and calculated strips.  Richer types
+and explicitly stateful cells could extend that composition to windowed
+analytics and models.  Decision nodes may produce bounded intents, but effects remain
 behind a separately governed adapter.  That separation lets composability grow
 without allowing convenience to erase provenance, freshness, or authority.
 

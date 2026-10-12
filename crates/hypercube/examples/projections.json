@@ -1,0 +1,30 @@
+{
+  "revision": 1,
+  "node_layouts": { "returns": ["NVDA", "AMD", "AVGO", "SPY"] },
+  "projections": [
+    {
+      "id": "nvda_residual",
+      "version": 1,
+      "picks": [
+        { "source": { "kind": "node", "id": "returns" }, "key": "NVDA" },
+        { "source": { "kind": "projection", "id": "semis_return" }, "key": "SEMIS" },
+        { "source": { "kind": "node", "id": "returns" }, "key": "SPY" }
+      ],
+      "function": "weighted_sum@1",
+      "parameters": [1.0, -0.8, -0.2],
+      "output_keys": ["NVDA"]
+    },
+    {
+      "id": "semis_return",
+      "version": 1,
+      "picks": [
+        { "source": { "kind": "node", "id": "returns" }, "key": "NVDA" },
+        { "source": { "kind": "node", "id": "returns" }, "key": "AMD" },
+        { "source": { "kind": "node", "id": "returns" }, "key": "AVGO" }
+      ],
+      "function": "weighted_sum@1",
+      "parameters": [0.5, 0.3, 0.2],
+      "output_keys": ["SEMIS"]
+    }
+  ]
+}

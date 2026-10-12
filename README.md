@@ -7,12 +7,14 @@ Hypercube is part of the open-source analytical architecture behind
 strategynet.ai. Read the
 [Hypercube architecture overview](https://strategynet.ai/insights/hypercube-open-source-live-analytics).
 
-The repository has two core parts:
+The repository has three core capabilities:
 
 - **Slice files** are typed, file-backed, memory-mapped vectors aligned to a
   stable entity layout.
 - **The Hypercube engine** evaluates fields and derived nodes over complete
   entity generations.
+- **Indexed projections** gather selected cells from nodes or other projections
+  into immutable calculated strips with independent output layouts.
 
 The optional **Circuit** crate adds an ordered Disruptor stage around complete
 Hypercube generations. It hosts stateful callbacks, records their inputs and
@@ -149,6 +151,62 @@ entity values explicitly, and produces a deterministic snapshot for each
 strictly increasing generation. An unchanged node declaration reuses its
 compiled execution plan across generations; `graph_compilations()` exposes
 unexpected topology churn.
+
+## Indexed projections and materialized views
+
+`hypercube::projection` collects named cells from engine nodes or other
+projections, applies a registered stateless function, and publishes an immutable
+contiguous strip. Each strip carries its output keys, definition version, graph
+revision, and input generation. Output keys can name baskets, instruments, or
+individual memberships such as `sector/instrument`; repeated input picks are
+allowed, while output keys must be unique within a strip.
+
+Run the basket → residual example:
+
+```bash
+cargo run -p hypercube-engine --example projections
+```
+
+The example registers its graph after the engine starts, calculates a basket
+from selected instrument returns, then calculates a residual using that basket
+and primitive returns from the same generation. Its recoverable definition is
+in [projections.json](crates/hypercube/examples/projections.json).
+
+```rust,ignore
+use std::sync::Arc;
+use hypercube::projection::{FunctionRegistry, ProjectionConfig, ProjectionRuntime};
+
+let config: ProjectionConfig = serde_json::from_str(&config_json)?;
+let mut views = ProjectionRuntime::new(FunctionRegistry::with_builtins());
+views.stage(config)?;
+let frame = views.evaluate(Arc::new(engine.update(update)?))?;
+let basket = Arc::clone(frame.strip("semis_return").unwrap());
+assert_eq!(basket.keys(), &["SEMIS"]);
+```
+
+`stage` validates a complete graph revision, resolves picks to layout offsets,
+checks function shapes, and rejects unknown dependencies or cycles. `evaluate`
+activates that revision only after the entire generation succeeds. Missing
+picked inputs or invalid results leave the previous frame visible and the
+revision pending, without substituting older values.
+
+The built-in `gather@1` preserves picked values and order. `weighted_sum@1`
+produces one output using one parameter per pick, without normalizing weights.
+Implement `ProjectionFunction` and register it under a stable versioned name
+for other calculations. Implementations must be deterministic, stateless, and
+free of side effects; registration cannot replace an existing function name.
+
+Readers may retain `Arc` frames or strips across later generations and graph
+replacements. Applications own config persistence and distribution of completed
+frames. Config recovery restores definitions; Circuit's existing recordings do
+not automatically include projection revisions or results.
+
+The [projection guide](docs/guide.md#indexed-projections) covers versioning,
+registration, failure/retry behavior, ownership, and recovery in detail.
+
+This initial API materializes in-process strips from coherent `Snapshot`s. It
+does not read concurrently changing mapped slices, add cross-file publication,
+or support stateful/windowed functions or dynamic membership rules.
 
 ## Slice API
 

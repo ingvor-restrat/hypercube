@@ -1,7 +1,9 @@
 # Reproducible Results
 
-These results were recorded from Hypercube `main` on 2 August 2026. Functional
-checks validate behavior and packaging. The separate Criterion section is a
+The functional test counts were updated on 12 October 2026 for indexed
+projections. Earlier benchmark and smoke-run results were recorded from
+Hypercube `main` on 2 August 2026 and have not been remeasured for projections.
+Functional checks validate behavior and packaging. The separate Criterion section is a
 scoped development-host benchmark, not a production latency claim.
 
 ## Test suite
@@ -21,7 +23,8 @@ Result:
 | ETF and pairs example invariants | 2 | passed |
 | slice layout, catalog, mmap, records, and vector algebra | 8 | passed |
 | circuit, triggers, recording, digest, and replay | 14 | passed |
-| **Total** | **37** | **passed** |
+| indexed projections, revisions, and config recovery | 8 | passed |
+| **Total** | **45** | **passed** |
 
 The suite includes dependency-cycle rejection, stale-generation rejection,
 stable-graph plan reuse, tie-aware ranking, deterministic generic and OU market
@@ -34,6 +37,13 @@ quote/trade/TAQ records, guarded dot products, ordered Disruptor processing,
 persistent and hysteretic trigger transitions, missing-data invalidation,
 recording validation, non-finite input rejection, exact floating-point JSON
 round trips, semantic divergence detection, and fresh-state replay.
+
+Projection tests cover basket-to-residual dependencies, config round trips,
+generation consistency, graph activation, retained readers across publication,
+reordered and repeated picks, missing-input retries, validation failures,
+definition-version reuse, and rejection of malformed or non-finite outputs.
+These are functional concurrency/ownership checks, not projection throughput or
+cross-process publication benchmarks.
 
 The complete all-target suite, including the benchmark smoke harness, also
 passes with `rustc 1.81.0`; benchmark-only dependency versions are pinned so

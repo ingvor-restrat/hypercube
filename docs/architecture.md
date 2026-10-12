@@ -21,12 +21,12 @@ synthetic or external input
               |
               v
        immutable snapshot
-       |       |          |
-       v       v          v
-  .slice files API/SSE  Disruptor circuit
-                           |
-                           v
-                    state/transitions
+       |       |          |                  |
+       v       v          v                  v
+  .slice files API/SSE  Disruptor circuit  ProjectionRuntime
+                           |                  |
+                           v                  v
+                    state/transitions   immutable strips
 ```
 
 ## Coordinate model
@@ -57,6 +57,34 @@ without turning the engine into a cross-generation value cache.
 snapshot and provides ordered, stateful processing with logical generation
 time. Replay creates fresh engine and processor state. Transports, persistence,
 and any external-effect adapters remain outside the graph.
+
+## Indexed projection model
+
+`ProjectionRuntime` consumes an `Arc<Snapshot>` and evaluates a separate,
+acyclic graph of immutable projection definitions. Each definition gathers
+ordered picks from engine nodes or other projections, applies a registered
+stateless function, and declares its own output keys. Membership relationships
+can describe overlapping hyperedges; calculation dependencies form the DAG
+used for scheduling. Repeated picks are allowed, but output keys are unique.
+
+`stage` validates a complete `ProjectionConfig` and compiles picks into offsets
+within declared layouts. Snapshot cells are resolved by key each generation,
+so changing physical cell order cannot redirect a compiled pick. All transitive
+inputs come from the same snapshot generation. Missing/non-finite picked cells
+or invalid function results fail the entire evaluation without publishing a
+partial frame or substituting old values.
+
+Registration and evaluation have one mutable owner. A staged graph activates
+only after a successful evaluation; published `Arc<ProjectionFrame>` and
+`Arc<ProjectionStrip>` objects retain their storage for existing readers.
+Each strip binds values, output layout, definition version, graph revision,
+and input generation. Calculations run synchronously; this API adds no worker
+pool, live mmap reads, or implicit cross-process transport.
+
+An in-process `ProjectionStrip` is distinct from a memory-mapped `.slice`.
+The existing `SlicePublisher` accepts engine snapshots and does not directly
+publish projection frames with their independent layouts. See the
+[projection walkthrough](guide.md#indexed-projections) for registration and recovery.
 
 ## Publication model
 
@@ -89,6 +117,13 @@ the last event from each upstream stream included in a generation. Replay
 outputs belong in a separate namespace and must not reach execution authority.
 See the [record/replay contract](replay.md).
 
+Projection config recovery is separate from Circuit replay. Applications persist
+the desired config and restore compatible named function implementations.
+Current recordings and snapshot digests do not include projection revisions or
+results. Reproducing a changing projection graph also requires its activation
+history and the corresponding inputs; config alone does not restore values or
+generation/version guards.
+
 ## Backpressure and truth
 
 The ring is an execution boundary, not the system of record, and does not make
@@ -119,6 +154,7 @@ The public engine contains reusable mechanics:
 - single-writer/many-reader consistency;
 - field extraction and cross-sectional transforms;
 - topological linear composition;
+- indexed, versioned projections with immutable result ownership;
 - generation monotonicity and deterministic snapshots;
 - reusable graph plans and fixed-capacity rolling moments;
 - synthetic injection and visualization.

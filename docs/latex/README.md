@@ -11,6 +11,11 @@ publication durability policies, the Imperial HFT pattern audit, measured
 Criterion results, and the leakage-controlled point/Huber/quantile/
 triple-barrier stat-arb study.
 
+The October 2026 revision adds the implemented indexed-projection runtime:
+ordered picks, stateless calculations, independent output layouts, runtime graph
+revisions, immutable shared results, and config recovery. It distinguishes these
+in-process strips from memory-mapped slice files and general stateful cells.
+
 ## Callbacks, Triggers, and Replay
 
 [Hypercube: Callbacks, Triggers, and Replay](hypercube_circuits.pdf)
@@ -19,12 +24,17 @@ completed Hypercube generation, maintain persistent trigger state, publish
 state changes, and record and replay the calculation. It includes the ETF,
 pairs, browser, and replay examples.
 
+The October 2026 revision explains how projections consume coherent snapshots
+and why their configs, activation history, and outputs are outside the current
+Circuit recording contract. Its workspace test table includes the eight new
+projection tests, for a total of 45.
+
 Both papers distinguish implemented behavior from future generation assembly,
 general stateful function cells, transport adapters, and execution authority.
 
-Both papers follow the plain 11-point article format used by the current Volt
-papers: Palatino and Helvetica typefaces, compact margins, and a standard title
-and abstract without a separate cover or contents page.
+Both papers use the repository's `strategynet-journal` class: compact A4 layout,
+8-point body text, explicit two-column sections, a standard title and abstract,
+and a two-column contents page.
 
 Build from this directory:
 

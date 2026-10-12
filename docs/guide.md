@@ -1,10 +1,9 @@
 # A Guided Tour of Hypercube
 
-Hypercube is easiest to understand as two cooperating systems.
-
 The engine turns one coherent input generation into calculated
-cross-sections. Slice publishes those cross-sections as stable memory-mapped
-vectors that other processes can read cheaply.
+cross-sections. The projection runtime gathers selected cells into new
+calculated strips. Slice publishes engine cross-sections as stable
+memory-mapped vectors that other processes can read cheaply.
 
 ## One generation
 
@@ -72,6 +71,106 @@ Every `CellValue` has:
 
 The in-process snapshot is coherent across every node in that generation.
 
+## Indexed projections
+
+A projection picks values from engine nodes or other projections, runs a
+stateless function, and publishes an immutable contiguous `ProjectionStrip`.
+Its layout is explicit and can name groups, instruments, or memberships such
+as `sector/instrument`. Repeated input picks are allowed; output keys must be
+unique. A projection strip lives in process and is not a `.slice` file.
+
+The runnable example defines a semiconductor basket and a dependent residual:
+
+```text
+returns[NVDA, AMD, AVGO] -- weights[0.5, 0.3, 0.2] --> semis_return[SEMIS]
+                                                           |
+returns[NVDA, SPY] -----------------------------------------+
+                                                           v
+                 NVDA - 0.8 * SEMIS - 0.2 * SPY --> nvda_residual[NVDA]
+```
+
+```bash
+cargo run -p hypercube-engine --example projections
+```
+
+The [complete example](../crates/hypercube/examples/projections.rs) starts the
+engine before registering the graph. Its
+[JSON config](../crates/hypercube/examples/projections.json) contains the graph
+revision, selectable source-node layouts, and projection definitions. Each
+definition specifies an ID, version, ordered picks, function name, parameters,
+and output keys. Source namespaces explicitly distinguish an engine `node`
+from a `projection`; declaration order does not determine execution order.
+
+With an existing engine and update, registration and evaluation look like:
+
+```rust,ignore
+use std::sync::Arc;
+use hypercube::projection::{FunctionRegistry, ProjectionConfig, ProjectionRuntime};
+
+let config: ProjectionConfig = serde_json::from_str(&config_json)?;
+let mut views = ProjectionRuntime::new(FunctionRegistry::with_builtins());
+views.stage(config)?;
+let snapshot = Arc::new(engine.update(update)?);
+let frame = views.evaluate(Arc::clone(&snapshot))?;
+let basket = Arc::clone(frame.strip("semis_return").unwrap());
+assert_eq!(basket.keys(), &["SEMIS"]);
+```
+
+`gather@1` returns the picked values in order and takes no parameters.
+`weighted_sum@1` uses one finite weight per pick and produces one value without
+normalizing the weights. Register other implementations through
+`ProjectionFunction`; its `validate` method checks shapes and parameters during
+staging, and `calculate` returns owned values. Implementations must be
+deterministic, stateless, and free of side effects. Existing function names
+cannot be replaced; use a new versioned name when semantics change.
+
+### Updating and sharing views
+
+Call `stage` with the complete desired graph, including retained projections,
+to add, replace, or remove definitions at runtime. Graph revisions increase;
+changed definitions also need higher definition versions. The compiler rejects
+unknown sources or keys, cycles, duplicate IDs/layout keys, and invalid function
+shapes. Snapshot cells are matched by key, not by their physical position.
+
+The next successful `evaluate` activates the pending graph and publishes all
+results together. Every dependency uses the supplied snapshot's generation.
+Missing or non-finite picked values, calculation errors, invalid output lengths,
+and non-finite outputs fail the whole evaluation. Unpicked missing cells are
+allowed. On failure, `latest()` retains the prior frame and `pending_config()`
+retains the staged definition; the same generation can be retried. The engine's
+own successful update is not rolled back, so retain its snapshot for that retry.
+No older projection value is substituted.
+
+To supersede a pending change, stage another complete config with a newer graph
+revision and advance any affected definition versions. Successfully staged
+versions cannot be repurposed, even if they never became active or were removed.
+Unchanged downstream definitions can retain their versions when upstream
+definitions change; the graph revision identifies the complete dependency set.
+
+The runtime has one mutable owner and evaluates synchronously. Applications
+share completed frames through their own channels or synchronization.
+Readers may retain an `Arc<ProjectionStrip>` while the owner evaluates later
+generations. The strip keeps its values, keys, definition version, graph
+revision, and generation together; its storage is never reused beneath a reader.
+The frame additionally retains the source snapshot and exact config.
+
+### Recovering definitions
+
+Serialize `frame.config()` with `serde_json` to capture the successfully active
+definition, or `pending_config()` for a staged definition. The application owns
+durable storage and chooses which revision to restore. On restart, register
+compatible function implementations, deserialize the config, and call `stage`.
+The example verifies identical results by evaluating the recovered graph against
+the same snapshot.
+
+Config restores definitions, not input history, output values, or earlier
+generation/version guards. Historical evaluation also needs the input snapshots
+and the revisions active at those generations. Circuit's current recording format
+does not automatically include that projection history; see the
+[replay boundary](replay.md#projection-recovery-and-replay).
+Dynamic membership rules and stateful/windowed projection functions remain
+outside this initial API.
+
 ## Publishing slices
 
 `SlicePublisher` maps selected node cross-sections onto one stable entity
@@ -90,7 +189,7 @@ One writer surrounds a vector update with an odd/even epoch. A reader accepts
 the copied vector only when the epoch was the same even value before and after
 the copy. Fixed records use the same idea per slot.
 
-Projection reuses node vectors and cached entity slots. `publish()` waits for a
+Slice publication reuses node vectors and cached entity slots. `publish()` waits for a
 durable flush for compatibility. `publish_with_durability()` can instead
 return after mapped-memory visibility or after scheduling asynchronous flush;
 the caller must choose that weaker postcondition deliberately.

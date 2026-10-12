@@ -70,6 +70,30 @@ generation in lockstep, and compares circuit sequence, semantic digest, and
 ordered state and transitions. A mismatch is reported at the first divergent
 generation while the rest of the recording is still checked.
 
+## Projection recovery and replay
+
+`ProjectionRuntime` is a separate consumer of coherent engine snapshots.
+Its JSON-serializable config restores graph definitions when compatible
+versioned functions are registered. This does not extend Circuit's existing
+recording schema: projection configs, activation history, output strips, and
+their values are absent from the current records and snapshot digest.
+The `verify` command therefore does not verify projection results.
+
+To reproduce projections, an application must retain the input snapshots (or
+updates from which to regenerate them), the config active at each generation,
+and compatible function implementations. Verification additionally needs
+expected projection results or their digests. A config-only restart does not
+restore old values or the runtime's generation and definition-version guards.
+Application-managed projection recording and replay must preserve the same
+isolation policy as the existing Circuit path.
+
+The built-in projection functions are stateless; no window checkpoint is needed
+for them. Dynamic membership, stateful projection functions, and automatic
+projection recording require additional contracts. The
+[projection example](../crates/hypercube/examples/projections.rs) demonstrates
+config recovery and recalculation from one retained snapshot, not a durable
+end-to-end replay system.
+
 ## Stateful processing
 
 The initial processor is a persistent upper-threshold trigger. It supports:
